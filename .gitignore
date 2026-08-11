@@ -1,0 +1,13 @@
+*.pyc
+__pycache__/
+backups/
+config/.env
+config/credentials.enc
+config/sites.yaml
+config/discovered_sites.json
+config/admin_data.json
+config/admin_notes.txt
+logs/
+screenshots/
+
+static/

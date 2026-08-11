@@ -1,0 +1,20 @@
+# Sample WordPress Site Configuration
+# Copy this file to config/sites.yaml and customize for your environment.
+
+sites:
+  example-site:
+    display_name: Example WordPress Site
+    status: Ready
+    credential_profile: example-profile
+    wp_path: /var/www/html
+    db_host: localhost
+    db_name: wp_example
+    db_user: wp_user
+    wp_cli_path: /usr/local/bin/wp
+    health_check_url: https://example.com
+    include_media: false
+    source: local
+    domain: example.com
+    creation_source: manual
+    created_at: '2026-01-01T00:00:00Z'
+    created_by: Admin User
