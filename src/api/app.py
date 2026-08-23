@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+import threading
 from flask import Flask, jsonify
 
 # Add project root to path
@@ -12,6 +13,35 @@ from src.api.routes.health import health_bp
 from src.api.routes.updates import updates_bp
 from src.api.routes.system import system_bp
 from src.api.routes.profiles import profiles_bp
+
+_CLEANUP_INTERVAL_SECONDS = 24 * 60 * 60  # daily
+
+
+def _run_cleanup_loop():
+    from src.logging.cleanup import CleanupManager
+    from src.logging.logger import logger
+
+    cleanup_mgr = CleanupManager()
+    while True:
+        try:
+            cleanup_mgr.run_scheduled_cleanup()
+        except Exception as e:
+            logger.error(f"Scheduled cleanup thread encountered an error: {e}")
+        time.sleep(_CLEANUP_INTERVAL_SECONDS)
+
+
+def start_cleanup_scheduler(debug: bool = False):
+    """
+    Starts a daemon thread that runs backup/log retention cleanup once a day.
+    When Flask's debug reloader is active it runs the app in two processes
+    (a monitor and a worker); only the worker sets WERKZEUG_RUN_MAIN=true, so
+    we skip starting a duplicate thread in the monitor process.
+    """
+    if debug and os.environ.get("WERKZEUG_RUN_MAIN") != "true":
+        return
+    thread = threading.Thread(target=_run_cleanup_loop, name="cleanup-scheduler", daemon=True)
+    thread.start()
+
 
 class AppFactory:
     @classmethod
@@ -100,5 +130,6 @@ class AppFactory:
 create_app = AppFactory.create_app
 
 if __name__ == "__main__":
+    start_cleanup_scheduler(debug=True)
     app = create_app()
     app.run(host="127.0.0.1", port=5000, debug=True)

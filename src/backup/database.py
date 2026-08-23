@@ -4,6 +4,25 @@ import time
 from typing import Dict, Any, List
 from src.execution.base import BaseExecutor
 
+# cmd.exe has no reliable in-quote escape for these characters (doubling a
+# quote does not consistently re-enter quoted state the way CSV/argv rules
+# suggest, and `%`/`^`/`&`/`|`/`<`/`>` are all meaningful to cmd.exe's own
+# line parser even inside a quoted string in some contexts). Rather than
+# attempt string-escaping that cmd.exe won't honor, reject values that would
+# require it.
+_WINDOWS_SHELL_UNSAFE_CHARS = set('"&|^<>%!')
+
+
+def _assert_windows_shell_safe(value: str, field_name: str) -> None:
+    unsafe = _WINDOWS_SHELL_UNSAFE_CHARS.intersection(value)
+    if unsafe:
+        raise ValueError(
+            f"Database {field_name} contains character(s) {''.join(sorted(unsafe))!r} "
+            f"that cannot be safely passed to a Windows shell command. "
+            f"Please remove them from the site's database {field_name}."
+        )
+
+
 class DatabaseBackup:
     def __init__(self, executor: BaseExecutor, db_config: Dict[str, Any], local_backup_path: str):
         self.executor = executor
@@ -18,21 +37,25 @@ class DatabaseBackup:
         timestamp = time.strftime("%Y%m%d_%H%M%S")
         db_name = self.db_config["name"]
         filename = f"{db_name}_{timestamp}.sql.gz"
-        
+
         # Ensure target dir exists
         os.makedirs(self.local_backup_path, exist_ok=True)
         full_local_path = os.path.join(self.local_backup_path, filename)
-        
+
         host = self.db_config.get("host", "localhost")
         user = self.db_config.get("user", "")
         password = self.db_config.get("password", "")
-        
+
         is_windows = getattr(self.executor, "connected", False) and hasattr(self.executor, "execute") and os.name == "nt" and getattr(self.executor, "__class__", None).__name__ == "LocalExecutor"
 
         if is_windows:
+            _assert_windows_shell_safe(password, "password")
+            _assert_windows_shell_safe(host, "host")
+            _assert_windows_shell_safe(user, "user")
+            _assert_windows_shell_safe(db_name, "name")
             cmd = (
-                f"set MYSQL_PWD={password}&& "
-                f"mysqldump -h {shlex.quote(host)} -u {shlex.quote(user)} {shlex.quote(db_name)}"
+                f'set "MYSQL_PWD={password}"&& '
+                f'mysqldump -h "{host}" -u "{user}" "{db_name}"'
             )
         else:
             cmd = (
@@ -55,18 +78,22 @@ class DatabaseBackup:
         """
         if not os.path.exists(backup_path):
             raise FileNotFoundError(f"Backup file not found: {backup_path}")
-            
+
         host = self.db_config.get("host", "localhost")
         user = self.db_config.get("user", "")
         password = self.db_config.get("password", "")
         db_name = self.db_config["name"]
-        
+
         is_windows = getattr(self.executor, "connected", False) and hasattr(self.executor, "execute") and os.name == "nt" and getattr(self.executor, "__class__", None).__name__ == "LocalExecutor"
 
         if is_windows:
+            _assert_windows_shell_safe(password, "password")
+            _assert_windows_shell_safe(host, "host")
+            _assert_windows_shell_safe(user, "user")
+            _assert_windows_shell_safe(db_name, "name")
             cmd = (
-                f"set MYSQL_PWD={password}&& "
-                f"mysql -h {shlex.quote(host)} -u {shlex.quote(user)} {shlex.quote(db_name)}"
+                f'set "MYSQL_PWD={password}"&& '
+                f'mysql -h "{host}" -u "{user}" "{db_name}"'
             )
         else:
             cmd = (

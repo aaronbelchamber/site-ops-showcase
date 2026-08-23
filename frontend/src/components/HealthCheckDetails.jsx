@@ -1,14 +1,15 @@
 import React, { useState, useEffect, useCallback } from "react";
 import api from "../services/api";
+import { showToast } from "../services/toast";
 import ImageLightbox from "./ImageLightbox";
 
 // --- Helper sub-components ---
 
 function SeverityBadge({ severity }) {
     const severityStyles = {
-        critical: { backgroundColor: "var(--md-sys-color-error)", color: "#fff" },
-        warning:  { backgroundColor: "#f59e0b", color: "#fff" },
-        ignored:  { backgroundColor: "var(--md-sys-color-outline)", color: "#fff" },
+        critical: { backgroundColor: "var(--md-sys-color-error)", color: "var(--md-sys-color-on-error)" },
+        warning:  { backgroundColor: "var(--md-sys-color-warning)", color: "var(--md-sys-color-on-warning)" },
+        ignored:  { backgroundColor: "var(--md-sys-color-outline)", color: "var(--md-sys-color-on-surface-inverse)" },
     };
     const style = severityStyles[severity] || severityStyles.ignored;
     return (
@@ -54,7 +55,7 @@ function AcknowledgeForm({ onSubmit, onCancel, isBusy }) {
         <div style={{
             marginTop: "0.75rem",
             padding: "0.75rem",
-            backgroundColor: "rgba(0,0,0,0.1)",
+            backgroundColor: "var(--md-sys-color-surface-variant)",
             borderRadius: "6px",
             display: "flex",
             flexDirection: "column",
@@ -112,13 +113,13 @@ function ConsoleErrorCard({ error, siteName, onAcknowledged, onUnacknowledged })
 
     const borderColors = {
         critical: "var(--md-sys-color-error)",
-        warning:  "#f59e0b",
+        warning:  "var(--md-sys-color-warning)",
         ignored:  "var(--md-sys-color-outline-variant)",
     };
     const bgColors = {
-        critical: "rgba(255, 0, 0, 0.04)",
-        warning:  "rgba(245, 158, 11, 0.04)",
-        ignored:  "rgba(0, 0, 0, 0.02)",
+        critical: "var(--md-sys-color-error-container)",
+        warning:  "var(--md-sys-color-warning-container)",
+        ignored:  "var(--md-sys-color-surface-dim)",
     };
 
     const handleAccept = useCallback(async (reason) => {
@@ -166,7 +167,7 @@ function ConsoleErrorCard({ error, siteName, onAcknowledged, onUnacknowledged })
                         color: error.severity === "critical"
                             ? "var(--md-sys-color-error)"
                             : error.severity === "warning"
-                            ? "#d97706"
+                            ? "var(--md-sys-color-warning)"
                             : "var(--md-sys-color-on-surface-variant)",
                         wordBreak: "break-word",
                         overflowWrap: "anywhere",
@@ -229,6 +230,68 @@ function ConsoleErrorCard({ error, siteName, onAcknowledged, onUnacknowledged })
             {localError && (
                 <div style={{ marginTop: "0.5rem", fontSize: "0.8rem", color: "var(--md-sys-color-error)" }}>
                     Error: {localError}
+                </div>
+            )}
+        </div>
+    );
+}
+
+function AssetIssuesSection({ brokenImages, failedAssetRequests }) {
+    const hasIssues = brokenImages.length > 0 || failedAssetRequests.length > 0;
+
+    if (!hasIssues) {
+        return (
+            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", color: "var(--md-sys-color-success)" }}>
+                <span className="material-symbols-outlined">check_circle</span>
+                <span>No broken images or failed asset requests found.</span>
+            </div>
+        );
+    }
+
+    return (
+        <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+            {brokenImages.length > 0 && (
+                <div>
+                    <div style={{ fontWeight: 600, fontSize: "0.875rem", marginBottom: "0.5rem", color: "var(--md-sys-color-error)" }}>
+                        {brokenImages.length} broken image{brokenImages.length === 1 ? "" : "s"} (loaded but rendered empty)
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+                        {brokenImages.map((img, i) => (
+                            <div key={i} style={{
+                                fontSize: "0.8rem",
+                                fontFamily: "monospace",
+                                padding: "0.5rem 0.75rem",
+                                backgroundColor: "var(--md-sys-color-error-container)",
+                                color: "var(--md-sys-color-on-error-container)",
+                                borderRadius: "6px",
+                                wordBreak: "break-all"
+                            }}>
+                                {img.src}{img.alt ? ` (alt: "${img.alt}")` : ""}
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+            {failedAssetRequests.length > 0 && (
+                <div>
+                    <div style={{ fontWeight: 600, fontSize: "0.875rem", marginBottom: "0.5rem", color: "var(--md-sys-color-error)" }}>
+                        {failedAssetRequests.length} failed asset request{failedAssetRequests.length === 1 ? "" : "s"} (image/CSS/JS/font returned an error)
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+                        {failedAssetRequests.map((req, i) => (
+                            <div key={i} style={{
+                                fontSize: "0.8rem",
+                                fontFamily: "monospace",
+                                padding: "0.5rem 0.75rem",
+                                backgroundColor: "var(--md-sys-color-error-container)",
+                                color: "var(--md-sys-color-on-error-container)",
+                                borderRadius: "6px",
+                                wordBreak: "break-all"
+                            }}>
+                                [{req.status}] {req.resource_type}: {req.url}
+                            </div>
+                        ))}
+                    </div>
                 </div>
             )}
         </div>
@@ -308,7 +371,7 @@ function ConsoleErrorsSection({ errors, siteName, onErrorsChanged }) {
                         </span>
                     )}
                     {activeErrors.filter(e => e.severity === "warning").length > 0 && (
-                        <span style={{ color: "#d97706", fontWeight: 600, fontSize: "0.875rem" }}>
+                        <span style={{ color: "var(--md-sys-color-warning)", fontWeight: 600, fontSize: "0.875rem" }}>
                             🟡 {activeErrors.filter(e => e.severity === "warning").length} warning
                         </span>
                     )}
@@ -549,12 +612,12 @@ export default function HealthCheckDetails({ siteName, healthCheckId, onBack }) 
                         </span>
                     </div>
                 </div>
-                <span 
+                <span
                     onClick={scrollToRootCause}
                     title="Click to jump to root cause of this health status"
                     style={{
                         backgroundColor: statusBadgeColor,
-                        color: "#fff",
+                        color: "var(--md-sys-color-on-surface-inverse)",
                         padding: "0.5rem 1rem",
                         borderRadius: "100px",
                         fontWeight: "bold",
@@ -757,6 +820,14 @@ export default function HealthCheckDetails({ siteName, healthCheckId, onBack }) 
                     errors={errors}
                     siteName={siteName}
                     onErrorsChanged={setErrors}
+                />
+            </div>
+
+            <div id="assetIssuesCard" className="md-card" style={{ padding: "1.5rem" }}>
+                <h3 style={{ margin: "0 0 1rem 0" }}>Broken Images & Assets</h3>
+                <AssetIssuesSection
+                    brokenImages={check?.checks?.http?.broken_images || []}
+                    failedAssetRequests={check?.checks?.http?.failed_asset_requests || []}
                 />
             </div>
 

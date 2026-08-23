@@ -247,6 +247,65 @@ class TestWebAPI(unittest.TestCase):
         self.assertEqual(data["data"]["site_name"], "systema-intel")
 
     @patch("src.api.routes.updates.load_sites_config")
+    @patch("src.api.routes.updates.start_task")
+    def test_trigger_check_updates_background(self, mock_start_task, mock_load_config):
+        mock_load_config.return_value = {
+            "systema-intel": {
+                "display_name": "Systema Intel",
+                "status": "Ready",
+                "wp_path": "/home/pf_brandager/systemaintel.com/cms",
+                "site_name": "systema-intel"
+            }
+        }
+        mock_start_task.return_value = "task-12345"
+
+        headers = {"Authorization": f"Bearer {self.api_token}"}
+        response = self.client.post("/api/sites/systema-intel/updates/check", headers=headers)
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.data)
+        self.assertTrue(data["success"])
+        self.assertEqual(data["data"]["task_id"], "task-12345")
+        self.assertEqual(data["data"]["status"], "running")
+
+    @patch("src.api.routes.updates.load_sites_config")
+    @patch("src.api.routes.updates.start_task")
+    def test_trigger_check_updates_returns_409_when_operation_in_progress(self, mock_start_task, mock_load_config):
+        mock_load_config.return_value = {
+            "systema-intel": {
+                "display_name": "Systema Intel",
+                "status": "Ready",
+                "wp_path": "/home/pf_brandager/systemaintel.com/cms",
+                "site_name": "systema-intel"
+            }
+        }
+        mock_start_task.return_value = None
+
+        headers = {"Authorization": f"Bearer {self.api_token}"}
+        response = self.client.post("/api/sites/systema-intel/updates/check", headers=headers)
+        self.assertEqual(response.status_code, 409)
+        data = json.loads(response.data)
+        self.assertFalse(data["success"])
+
+    @patch("src.api.routes.updates.load_sites_config")
+    @patch("src.api.routes.updates.start_task")
+    def test_get_updates_async_returns_409_when_operation_in_progress(self, mock_start_task, mock_load_config):
+        mock_load_config.return_value = {
+            "systema-intel": {
+                "display_name": "Systema Intel",
+                "status": "Ready",
+                "wp_path": "/home/pf_brandager/systemaintel.com/cms",
+                "site_name": "systema-intel"
+            }
+        }
+        mock_start_task.return_value = None
+
+        headers = {"Authorization": f"Bearer {self.api_token}"}
+        response = self.client.get("/api/sites/systema-intel/updates?async=true", headers=headers)
+        self.assertEqual(response.status_code, 409)
+        data = json.loads(response.data)
+        self.assertFalse(data["success"])
+
+    @patch("src.api.routes.updates.load_sites_config")
     def test_get_updates_missing_wp_path(self, mock_load_config):
         mock_load_config.return_value = {
             "unconfigured-site": {

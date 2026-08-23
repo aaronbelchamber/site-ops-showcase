@@ -49,7 +49,8 @@ class HealthCheckManager:
         active_errors = [
             e for e in browser_res["console_errors"] if e.get("severity") != "ignored"
         ]
-        if browser_res["status_code"] > 302 or browser_res["status_code"] == 0 or active_errors:
+        has_asset_issues = bool(browser_res.get("broken_images")) or bool(browser_res.get("failed_asset_requests"))
+        if browser_res["status_code"] > 302 or browser_res["status_code"] == 0 or active_errors or has_asset_issues:
             browser_res["status"] = "fail"
         else:
             browser_res["status"] = "pass"
@@ -73,6 +74,14 @@ class HealthCheckManager:
             pre_active = [e for e in pre_errors if e.get("severity") != "ignored"]
             post_active = [e for e in post_errors if e.get("severity") != "ignored"]
             console_errors_matched = self._compare_console_errors(pre_active, post_active)
+
+        asset_issues_matched = True
+        if baseline_report:
+            pre_http = baseline_report.get("checks", {}).get("http", {})
+            asset_issues_matched = (
+                self._compare_asset_issues(pre_http.get("broken_images", []), browser_res.get("broken_images", []), key="src") and
+                self._compare_asset_issues(pre_http.get("failed_asset_requests", []), browser_res.get("failed_asset_requests", []), key="url")
+            )
 
         screenshot_diffs = {
             "matched": True,
@@ -123,6 +132,11 @@ class HealthCheckManager:
             if baseline_report and not screenshot_diffs.get("matched", True) and not diff_accepted:
                 overall_status = "degraded"
                 status_reasons.append("Visual layout differences detected between pre and post update")
+            if has_asset_issues:
+                overall_status = "degraded"
+                broken_count = len(browser_res.get("broken_images", []))
+                failed_count = len(browser_res.get("failed_asset_requests", []))
+                status_reasons.append(f"{broken_count} broken image(s) and {failed_count} failed asset request(s) detected on the live page")
 
         # Check for Notice / Console errors on a functional page
         if overall_status not in ["critical", "degraded"]:
@@ -172,6 +186,9 @@ class HealthCheckManager:
                     "screenshots": browser_res.get("screenshots"),
                     "console_errors_matched": console_errors_matched,
                     "screenshot_diffs": screenshot_diffs,
+                    "broken_images": browser_res.get("broken_images", []),
+                    "failed_asset_requests": browser_res.get("failed_asset_requests", []),
+                    "asset_issues_matched": asset_issues_matched,
                 },
                 "wp_core": {
                     "version": core_version,
@@ -393,7 +410,27 @@ class HealthCheckManager:
         for err in post_errors:
             if err.get("text", "") not in pre_texts:
                 return False
-                
+
+        return True
+
+    def _compare_asset_issues(
+        self, pre_issues: List[Dict[str, Any]], post_issues: List[Dict[str, Any]], key: str
+    ) -> bool:
+        """
+        Compare post-update broken images / failed asset requests against the
+        pre-update baseline. Returns True if every post-update issue was already
+        present pre-update (no new breakage) and the count has not increased —
+        mirrors _compare_console_errors so an image that was already broken
+        before the update doesn't trigger a rollback the update didn't cause.
+        """
+        if len(post_issues) > len(pre_issues):
+            return False
+
+        pre_keys = {issue.get(key, "") for issue in pre_issues}
+        for issue in post_issues:
+            if issue.get(key, "") not in pre_keys:
+                return False
+
         return True
 
     def _diff_screenshots(self, pre_screenshots: Dict[str, Any], post_screenshots: Dict[str, Any], check_id: str) -> Dict[str, Any]:

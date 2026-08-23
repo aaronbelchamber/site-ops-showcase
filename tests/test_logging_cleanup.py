@@ -27,15 +27,29 @@ class TestLoggingAndCleanup(unittest.TestCase):
     def test_logger_writes_to_file(self):
         # We can use the global logger to check it works
         logger.info("Test log statement")
-        
-        # Verify app.log file exists in project logs dir
-        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        log_file = os.path.join(project_root, "logs", "app.log")
-        
+
+        # Verify app.log file exists in the current month's logs subdirectory
+        from src.logging.logger import current_month_dir
+        log_file = os.path.join(current_month_dir(), "app.log")
+
         self.assertTrue(os.path.exists(log_file))
         with open(log_file, "r", encoding="utf-8") as f:
             content = f.read()
         self.assertIn("Test log statement", content)
+
+    def test_cleanup_deletes_expired_month_directories(self):
+        import datetime
+        # A month directory old enough to be past the 30-day minimum retention
+        old_month = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=95)).strftime("%Y-%m")
+        old_dir = os.path.join(self.cleanup_mgr.logs_dir, old_month)
+        os.makedirs(old_dir, exist_ok=True)
+        with open(os.path.join(old_dir, "app.log"), "w", encoding="utf-8") as f:
+            f.write("old entry\n")
+
+        deleted = self.cleanup_mgr.cleanup_old_log_months(retention_days=30)
+
+        self.assertEqual(deleted, 1)
+        self.assertFalse(os.path.exists(old_dir))
 
     def test_cleanup_logs_pruning(self):
         health_dir = os.path.join(self.cleanup_mgr.logs_dir, "health")
@@ -76,6 +90,31 @@ class TestLoggingAndCleanup(unittest.TestCase):
         remaining_2 = json.loads(lines[1])
         self.assertEqual(remaining_1["timestamp"], mid_time_str)
         self.assertEqual(remaining_2["timestamp"], recent_time_str)
+
+    def test_migrate_legacy_flat_logs(self):
+        os.makedirs(self.cleanup_mgr.logs_dir, exist_ok=True)
+        legacy_log = os.path.join(self.cleanup_mgr.logs_dir, "app.log")
+        with open(legacy_log, "w", encoding="utf-8") as f:
+            f.write("[2020-01-01T00:00:00Z] [INFO] legacy entry\n")
+
+        # A rotated backup old enough to be past the 30-day minimum retention
+        old_backup = os.path.join(self.cleanup_mgr.logs_dir, "app.log.1")
+        with open(old_backup, "w", encoding="utf-8") as f:
+            f.write("old rotated entry\n")
+        old_time = time.time() - 40 * 86400
+        os.utime(old_backup, (old_time, old_time))
+
+        migrated = self.cleanup_mgr.migrate_legacy_flat_logs(retention_days=30)
+
+        self.assertEqual(migrated, 2)
+        self.assertFalse(os.path.exists(legacy_log))
+        self.assertFalse(os.path.exists(old_backup))
+
+        from src.logging.logger import current_month_dir
+        current_log = os.path.join(current_month_dir(self.cleanup_mgr.logs_dir), "app.log")
+        with open(current_log, "r", encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("legacy entry", content)
 
 if __name__ == "__main__":
     unittest.main()

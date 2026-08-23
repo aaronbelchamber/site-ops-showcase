@@ -1,11 +1,17 @@
 import os
+import re
 import json
+import shutil
 import time
+import datetime
 from typing import Dict, Any, List
 from src.config.loader import load_sites_config, load_credentials
 from src.execution import get_executor
 from src.backup.manager import BackupManager
-from src.logging.logger import logger
+from src.logging.logger import logger, current_month_dir
+
+MONTH_DIR_PATTERN = re.compile(r'^\d{4}-\d{2}$')
+LEGACY_APP_LOG_PATTERN = re.compile(r'^app\.log(\.\d+)?$')
 
 class CleanupManager:
     def __init__(self):
@@ -45,11 +51,92 @@ class CleanupManager:
                 
         return total_deleted
 
+    def cleanup_old_log_months(self, retention_days: int) -> int:
+        """
+        Delete whole logs/<YYYY-MM> directories whose month has fully aged
+        past retention_days. This is how the monthly app.log self-cleans;
+        the current month's directory is never touched.
+        """
+        if not os.path.isdir(self.logs_dir):
+            return 0
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        deleted = 0
+
+        for name in os.listdir(self.logs_dir):
+            if not MONTH_DIR_PATTERN.match(name):
+                continue
+            path = os.path.join(self.logs_dir, name)
+            if not os.path.isdir(path):
+                continue
+            try:
+                year, month = int(name[:4]), int(name[5:7])
+                # Age from the end of that month, so a month isn't deleted
+                # until it's been over for the full retention window.
+                if month == 12:
+                    month_end = datetime.datetime(year + 1, 1, 1, tzinfo=datetime.timezone.utc)
+                else:
+                    month_end = datetime.datetime(year, month + 1, 1, tzinfo=datetime.timezone.utc)
+                age_days = (now - month_end).days
+                if age_days > retention_days:
+                    shutil.rmtree(path)
+                    logger.info(f"Deleted expired log month directory: logs/{name} (age: {age_days} days).")
+                    deleted += 1
+            except Exception as e:
+                logger.error(f"Failed to evaluate/delete log month directory '{name}': {e}")
+
+        return deleted
+
+    def migrate_legacy_flat_logs(self, retention_days: int) -> int:
+        """
+        Handle the pre-monthly-organization logs/app.log[.N] files left behind
+        by an upgrade: fold the live logs/app.log into the current month's
+        file (so recent history isn't lost), then remove it and any rotated
+        app.log.N backups once they're past the retention window.
+        """
+        if not os.path.isdir(self.logs_dir):
+            return 0
+
+        removed = 0
+        legacy_app_log = os.path.join(self.logs_dir, "app.log")
+        if os.path.isfile(legacy_app_log):
+            try:
+                current_log = os.path.join(current_month_dir(self.logs_dir), "app.log")
+                with open(legacy_app_log, "r", encoding="utf-8", errors="ignore") as src:
+                    content = src.read()
+                if content:
+                    with open(current_log, "a", encoding="utf-8") as dst:
+                        dst.write(content)
+                os.remove(legacy_app_log)
+                logger.info("Migrated legacy logs/app.log into the current month's log and removed it.")
+                removed += 1
+            except Exception as e:
+                logger.error(f"Failed to migrate legacy logs/app.log: {e}")
+
+        now_epoch = time.time()
+        retention_seconds = retention_days * 86400
+        for name in os.listdir(self.logs_dir):
+            if name == "app.log" or not LEGACY_APP_LOG_PATTERN.match(name):
+                continue
+            path = os.path.join(self.logs_dir, name)
+            if not os.path.isfile(path):
+                continue
+            try:
+                if (now_epoch - os.path.getmtime(path)) > retention_seconds:
+                    os.remove(path)
+                    logger.info(f"Deleted expired legacy log backup: logs/{name}")
+                    removed += 1
+            except Exception as e:
+                logger.error(f"Failed to evaluate/delete legacy log backup '{name}': {e}")
+
+        return removed
+
     def prune_app_log(self, retention_days: int) -> bool:
         """
-        Prune logs/app.log entries older than retention_days.
+        Prune the current month's app.log of entries older than retention_days.
+        Whole expired months are removed separately by cleanup_old_log_months.
         """
-        log_path = os.path.join(self.logs_dir, "app.log")
+        log_path = os.path.join(current_month_dir(self.logs_dir), "app.log")
         if not os.path.exists(log_path):
             return False
             
@@ -98,14 +185,16 @@ class CleanupManager:
         """
         Prune old entries from JSONL logs (health, updates) and app.log that exceed the retention period.
         """
-        if retention_days < 14:
-            logger.warning(f"Requested log retention period ({retention_days} days) is less than the strict 14-day minimum. Enforcing 14 days.")
-            retention_days = 14
+        if retention_days < 30:
+            logger.warning(f"Requested log retention period ({retention_days} days) is less than the strict 30-day minimum. Enforcing 30 days.")
+            retention_days = 30
         logger.info(f"Starting log pruning. Retention period: {retention_days} days.")
         
-        # Prune main application log file
+        # Prune main application log file (current month) and remove expired month directories
+        self.migrate_legacy_flat_logs(retention_days)
         self.prune_app_log(retention_days)
-        
+        self.cleanup_old_log_months(retention_days)
+
         now_epoch = time.time()
         retention_seconds = retention_days * 86400
         
@@ -167,9 +256,9 @@ class CleanupManager:
             backup_retention = 30
             
         try:
-            log_retention = int(os.getenv("LOG_RETENTION_DAYS", "14"))
+            log_retention = int(os.getenv("LOG_RETENTION_DAYS", "30"))
         except Exception:
-            log_retention = 14
+            log_retention = 30
             
         logger.info("Executing scheduled system cleanup...")
         

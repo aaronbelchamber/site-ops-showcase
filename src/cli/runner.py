@@ -14,6 +14,9 @@ from src.cli.commands import (
     RunServerCommand,
     CleanupCommand,
     SetupGDriveCommand,
+    GitInitCommand,
+    GitStatusCommand,
+    GitPushCommand,
 )
 
 class SiteManagerCLI:
@@ -87,6 +90,23 @@ class SiteManagerCLI:
         def setup_gdrive_cmd(p):
             p.add_argument("--path", dest="gdrive_path", help="Target Google Drive backup directory path")
         self._register("setup-gdrive", SetupGDriveCommand, setup_gdrive_cmd)
+
+        # 11. git-init
+        def setup_git_init(p):
+            p.add_argument("--site", help="Specific site slug to initialize")
+            p.add_argument("--all", action="store_true", help="Initialize all Ready sites")
+            p.add_argument("--force", action="store_true", help="Force re-initialization if already initialized")
+        self._register("git-init", GitInitCommand, setup_git_init)
+
+        # 12. git-status
+        def setup_git_status(p):
+            p.add_argument("--site", required=True, help="Specific site slug to inspect")
+        self._register("git-status", GitStatusCommand, setup_git_status)
+
+        # 13. git-push
+        def setup_git_push(p):
+            p.add_argument("--site", required=True, help="Specific site slug to push")
+        self._register("git-push", GitPushCommand, setup_git_push)
 
     def run(self, argv=None) -> int:
         args = self.parser.parse_args(argv)

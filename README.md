@@ -81,6 +81,14 @@ python manage.py runserver
 ```
 Open **`http://127.0.0.1:5000`** in your browser.
 
+#### Windows launchers
+Use the project batch launchers from the repo root:
+
+```bat
+run.bat      :: production-style local startup
+run_dev.bat  :: frontend + backend development mode
+```
+
 ---
 
 ## 🏗️ Architecture & Security Model

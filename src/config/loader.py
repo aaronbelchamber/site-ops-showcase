@@ -49,6 +49,10 @@ class SiteConfigModel(BaseModel):
     last_vulnerability_scan: Optional[str] = None
     vulnerability_status: Optional[str] = None
     last_vulnerability_details: Optional[Dict[str, Any]] = None
+    git_enabled: bool = True
+    git_remote_url: Optional[str] = None
+    git_auto_commit: bool = True
+    git_auto_push: bool = True
     site_name: Optional[str] = Field(None, exclude=True)
 
     ssh_password: Optional[str] = Field(None, exclude=True)

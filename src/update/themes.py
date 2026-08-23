@@ -2,6 +2,7 @@ import time
 import uuid
 from typing import Dict, Any, Optional
 from src.api.tasks import set_task_progress
+from src.wp.cache import CacheManager
 
 class ThemeUpdater:
     """
@@ -15,7 +16,8 @@ class ThemeUpdater:
         health_manager: Any,
         site_config: Optional[Dict[str, Any]] = None,
         credentials: Optional[Dict[str, Any]] = None,
-        executor: Any = None
+        executor: Any = None,
+        cache_manager: Optional[CacheManager] = None
     ):
         self.wp_cli = wp_cli
         self.backup_manager = backup_manager
@@ -23,6 +25,7 @@ class ThemeUpdater:
         self.site_config = site_config or {}
         self.credentials = credentials or {}
         self.executor = executor
+        self.cache_manager = cache_manager or CacheManager(self.site_config, wp_cli)
 
     def check_updates(self) -> Dict[str, Any]:
         try:
@@ -140,7 +143,11 @@ class ThemeUpdater:
                 "error": f"WordPress theme update command failed: {update_res.stderr}."
             }
 
-        # 4. Post-update quality check or mandatory screenshot refresh
+        # 4. Clear Elementor, caching plugin, and object caches before post-update snapshot comparison
+        set_task_progress("Clearing site caches and refreshing assets...")
+        cache_flush_res = self.cache_manager.clear_all_caches()
+
+        # 5. Post-update quality check or mandatory screenshot refresh
         post_status = "completed"
         if quality_checks and pre_report:
             set_task_progress("Verifying site health after theme update...")
@@ -158,8 +165,9 @@ class ThemeUpdater:
             )
             console_errors_failed = not post_http.get("console_errors_matched", True)
             screenshots_failed = not post_http.get("screenshot_diffs", {}).get("matched", True)
+            asset_issues_failed = not post_http.get("asset_issues_matched", True)
 
-            post_healthy = not (db_failed or status_code_failed or console_errors_failed or screenshots_failed)
+            post_healthy = not (db_failed or status_code_failed or console_errors_failed or screenshots_failed or asset_issues_failed)
 
             if not post_healthy:
                 set_task_progress("Post-update health check degraded! Initiating rollback...")
@@ -182,6 +190,7 @@ class ThemeUpdater:
                     "post_update_health": post_status,
                     "status": "rolled_back" if rollback_ok else "failed",
                     "rollback_triggered": bool(backup_id),
+                    "cache_flush": cache_flush_res,
                     "error": f"Post-update health check degraded. Rollback status: {'Success' if rollback_ok else f'Failed: {rollback_err}'}"
                 }
         else:
@@ -204,5 +213,6 @@ class ThemeUpdater:
             "post_update_health": post_status,
             "status": "completed",
             "rollback_triggered": False,
+            "cache_flush": cache_flush_res,
             "error": None
         }

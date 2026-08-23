@@ -1,6 +1,8 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import api from "./services/api";
 import { showToast } from "./services/toast";
+import { useSitesContext } from "./context/SitesContext";
+import { useTaskPolling } from "./hooks/useTaskPolling";
 import ToastContainer from "./components/ToastContainer";
 import TopStatusContainer from "./components/TopStatusContainer";
 import AuthOverlay from "./components/AuthOverlay";
@@ -12,31 +14,16 @@ import ManageSitesView from "./components/ManageSitesView";
 import AdminProfilesTab from "./components/admin/AdminProfilesTab";
 import AdminBackupsTab from "./components/admin/AdminBackupsTab";
 import AdminMaintenanceTab from "./components/admin/AdminMaintenanceTab";
-
-const arePathsEqual = (pathA, pathB, homeDir) => {
-
-    if (!pathA || !pathB) return false;
-    
-    const norm = (p) => {
-        let res = p.replace(/\\/g, "/").trim();
-        if (homeDir) {
-            if (res.startsWith("~/")) {
-                res = homeDir.replace(/\\/g, "/") + res.substring(1);
-            }
-        }
-        if (res.endsWith("/")) {
-            res = res.slice(0, -1);
-        }
-        return res.toLowerCase();
-    };
-    
-    return norm(pathA) === norm(pathB);
-};
+import { STALE_THRESHOLD_HOURS, isSiteStale, arePathsEqual } from "./utils/siteHelpers";
 
 export default function App() {
+    const sitesContext = useSitesContext();
+    const { pollTaskWithDelay } = useTaskPolling();
+    const staleCheckTimeoutsRef = useRef([]);
     const [isAuthenticated, setIsAuthenticated] = useState(api.hasToken());
     const [sites, setSites] = useState([]);
     const [loadingSites, setLoadingSites] = useState(false);
+    const [staleOnlyFilter, setStaleOnlyFilter] = useState(false);
     const [siteViewMode, setSiteViewMode] = useState(() => {
         try {
             return localStorage.getItem("wp_mgr_site_view_mode") || "grid";
@@ -402,12 +389,83 @@ export default function App() {
             showToast(`Failed to purge health data: ${error.message}`, "error");
         }
     };
+    const triggerStaleChecks = (siteList) => {
+        // Cancel any staggered checks still pending from a previous call
+        // (e.g. a rapid site add/edit/delete triggering another refresh).
+        staleCheckTimeoutsRef.current.forEach(clearTimeout);
+        staleCheckTimeoutsRef.current = [];
+
+        if (!siteList || !Array.isArray(siteList)) return;
+
+        // Filter only Ready sites
+        const readySites = siteList.filter(s => s.status === "Ready");
+
+        const runStaleCheck = async (siteName) => {
+            try {
+                if (sitesContext?.setSiteCheckInFlight) {
+                    sitesContext.setSiteCheckInFlight(siteName, true);
+                }
+                const res = await api.triggerCheckUpdates(siteName);
+                if (res && res.task_id) {
+                    pollTaskWithDelay(
+                        res.task_id,
+                        `Updates check completed for ${siteName}`,
+                        (result) => {
+                            if (sitesContext?.setSiteCheckInFlight) {
+                                sitesContext.setSiteCheckInFlight(siteName, false);
+                            }
+                            if (result && sitesContext?.setSiteUpdates) {
+                                sitesContext.setSiteUpdates(siteName, result);
+                            }
+                        }
+                    );
+                } else {
+                    if (sitesContext?.setSiteCheckInFlight) {
+                        sitesContext.setSiteCheckInFlight(siteName, false);
+                    }
+                }
+            } catch (err) {
+                console.debug("Stale check trigger failed for", siteName, err);
+                if (sitesContext?.setSiteCheckInFlight) {
+                    sitesContext.setSiteCheckInFlight(siteName, false);
+                }
+            }
+        };
+
+        let staleIndex = 0;
+        for (const site of readySites) {
+            const siteName = site.site_name;
+            const summary = site.update_summary;
+            let isStale = true;
+
+            if (summary && summary.timestamp) {
+                const checkTime = new Date(summary.timestamp).getTime();
+                if (!isNaN(checkTime)) {
+                    const ageMs = Date.now() - checkTime;
+                    isStale = ageMs > (24 * 60 * 60 * 1000);
+                }
+            }
+
+            if (isStale) {
+                // Stagger the trigger requests themselves (not just polling)
+                // so we don't fire many concurrent SSH/WP-CLI checks at once.
+                const timeoutId = setTimeout(() => runStaleCheck(siteName), staleIndex * 10000);
+                staleCheckTimeoutsRef.current.push(timeoutId);
+                staleIndex++;
+            }
+        }
+    };
+
     const loadSites = async () => {
         if (!api.hasToken()) return;
         setLoadingSites(true);
         try {
             const data = await api.getSites();
             setSites(data);
+            if (sitesContext?.setSites) {
+                sitesContext.setSites(data);
+            }
+            triggerStaleChecks(data);
         } catch (error) {
             console.error("Failed to load sites:", error);
             // If it failed because of 401, the unauthorized event will fire
@@ -701,9 +759,21 @@ export default function App() {
                             <span className="badge badge-success">Ready: {sites.filter(s => s.status === "Ready").length}</span>
                             <span className="badge badge-warning">In Progress: {sites.filter(s => s.status === "In Progress").length}</span>
                             <span className="badge badge-neutral">Archived: {sites.filter(s => s.status === "Archived").length}</span>
+                            <button
+                                type="button"
+                                className={`badge badge-clickable ${staleOnlyFilter ? "badge-stale-orange" : "badge-neutral"}`}
+                                onClick={() => setStaleOnlyFilter(v => !v)}
+                                title={`Sites whose last update check was more than ${STALE_THRESHOLD_HOURS}h ago. Click to ${staleOnlyFilter ? "clear" : "apply"} this filter.`}
+                                aria-pressed={staleOnlyFilter}
+                            >
+                                <span className="material-symbols-outlined" aria-hidden="true" style={{ fontSize: "14px", verticalAlign: "middle" }}>
+                                    {staleOnlyFilter ? "filter_alt" : "filter_alt_off"}
+                                </span>
+                                {" "}Stale (&gt;{STALE_THRESHOLD_HOURS}h): {sites.filter(isSiteStale).length}
+                            </button>
                         </div>
                         <SiteGrid
-                            sites={sites}
+                            sites={staleOnlyFilter ? sites.filter(isSiteStale) : sites}
                             loading={loadingSites}
                             viewMode={siteViewMode}
                             onViewDetails={(siteName) => {

@@ -160,9 +160,18 @@ class APIClient {
 
 
     // Update methods
-    checkUpdates(siteName, force = false) {
-        const query = force ? "?force=true" : "";
+    checkUpdates(siteName, force = false, isAsync = false) {
+        const params = [];
+        if (force) params.push("force=true");
+        if (isAsync) params.push("async=true");
+        const query = params.length > 0 ? `?${params.join("&")}` : "";
         return this.request(`/api/sites/${siteName}/updates${query}`);
+    }
+
+    triggerCheckUpdates(siteName) {
+        return this.request(`/api/sites/${siteName}/updates/check`, {
+            method: "POST"
+        });
     }
 
     updateCore(siteName, major = false, createBackup = true, qualityChecks = true) {
@@ -435,8 +444,27 @@ class APIClient {
             method: "DELETE"
         });
     }
+
+    // Git integration methods
+    getGitStatus(siteName) {
+        return this.request(`/api/sites/${siteName}/git/status`);
+    }
+
+    initGitRepo(siteName, options = {}) {
+        return this.request(`/api/sites/${siteName}/git/init`, {
+            method: "POST",
+            body: JSON.stringify(options)
+        });
+    }
+
+    pushGitRepo(siteName) {
+        return this.request(`/api/sites/${siteName}/git/push`, {
+            method: "POST"
+        });
+    }
 }
 
 const api = new APIClient();
 export default api;
+
 

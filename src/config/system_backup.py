@@ -3,7 +3,7 @@ import shutil
 import zipfile
 import time
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from src.config.loader import SITES_YAML_PATH, ADMIN_DATA_JSON_PATH, CREDENTIALS_ENC_PATH, ENV_PATH, ADMIN_NOTES_TXT_PATH
 
 class SystemBackupManager:

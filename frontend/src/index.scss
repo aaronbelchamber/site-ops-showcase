@@ -1,4 +1,6 @@
 /* WordPress Site Manager - Material Design 3 Inspired Stylesheet */
+@use './styles/tokens' as *;
+@use './styles/mixins' as *;
 
 @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap');
 
@@ -18,7 +20,9 @@
     --md-sys-color-on-surface: #1A1C1E;
     --md-sys-color-surface-variant: #E0E2EC;
     --md-sys-color-on-surface-variant: #43474E;
-    
+    --md-sys-color-surface-dim: #DAD9DD;
+    --md-sys-color-on-surface-inverse: #ffffff;
+
     --md-sys-color-background: #F8F9FA;
     --md-sys-color-on-background: #1A1C1E;
     
@@ -37,6 +41,7 @@
     --md-sys-color-on-success-container: #0F5132;
 
     --md-sys-color-warning: #B78A00;
+    --md-sys-color-on-warning: #ffffff;
     --md-sys-color-warning-container: #FFF3CD;
     --md-sys-color-on-warning-container: #664D03;
 
@@ -46,13 +51,13 @@
     --md-sys-elevation-3: 0px 4px 12px 4px rgba(0, 0, 0, 0.1), 0px 2px 6px 0px rgba(0, 0, 0, 0.15);
 
     /* Shape */
-    --md-sys-shape-corner-small: 8px;
-    --md-sys-shape-corner-medium: 16px;
+    --md-sys-shape-corner-small: #{$radius-md};
+    --md-sys-shape-corner-medium: #{$radius-2xl};
     --md-sys-shape-corner-large: 24px;
-    --md-sys-shape-corner-full: 9999px;
+    --md-sys-shape-corner-full: #{$radius-pill};
 
     /* Transitions */
-    --md-sys-transition-default: all 0.25s cubic-bezier(0.2, 0, 0, 1);
+    --md-sys-transition-default: all #{$transition-default};
 }
 
 @media (prefers-color-scheme: dark) {
@@ -72,7 +77,9 @@
         --md-sys-color-on-surface: #E2E2E6;
         --md-sys-color-surface-variant: #43474E;
         --md-sys-color-on-surface-variant: #C3C6CF;
-        
+        --md-sys-color-surface-dim: #131316;
+        --md-sys-color-on-surface-inverse: #1A1C1E;
+
         --md-sys-color-background: #0B0E11;
         --md-sys-color-on-background: #E2E2E6;
         
@@ -89,6 +96,7 @@
         --md-sys-color-on-success-container: #D1E7DD;
 
         --md-sys-color-warning: #FFC000;
+        --md-sys-color-on-warning: #3F2E00;
         --md-sys-color-warning-container: #4D3A00;
         --md-sys-color-on-warning-container: #FFF3CD;
     }
@@ -682,6 +690,22 @@ body {
     color: var(--md-sys-color-on-surface-variant);
 }
 
+.badge-clickable {
+    border: none;
+    font-family: inherit;
+    cursor: pointer;
+    transition: filter 0.15s ease-in-out;
+}
+
+.badge-clickable:hover {
+    filter: brightness(0.93);
+}
+
+.badge-clickable:focus-visible {
+    outline: 2px solid var(--md-sys-color-primary);
+    outline-offset: 2px;
+}
+
 /* Quick Actions */
 .card-actions {
     display: flex;
@@ -974,6 +998,17 @@ body {
     text-overflow: ellipsis !important;
 }
 
+.last-checked-label {
+    display: block;
+    font-size: 0.7rem;
+    color: var(--md-sys-color-outline);
+}
+
+.site-card-row .last-checked-label {
+    font-size: 0.65rem !important;
+    white-space: nowrap !important;
+}
+
 .site-card-row .row-col-health {
     flex-shrink: 0 !important;
 }
@@ -1148,12 +1183,14 @@ body {
     z-index: 1000;
     opacity: 0;
     pointer-events: none;
-    transition: opacity 0.2s ease-in-out;
+    visibility: hidden;
+    transition: opacity 0.2s ease-in-out, visibility 0.2s ease-in-out;
 }
 
 .modal-overlay.active {
     opacity: 1;
     pointer-events: auto;
+    visibility: visible;
 }
 
 .modal-content {

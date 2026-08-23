@@ -1,15 +1,34 @@
 import React, { useState, useEffect } from "react";
 import api from "../services/api";
 import { showToast } from "../services/toast";
+import { useSitesContext } from "../context/SitesContext";
+import {
+    getDaysSinceLastUpdateCheck,
+    getLastCheckedLabel as getLastCheckedLabelFor,
+    getUpdateStalenessTooltip as getUpdateStalenessTooltipFor,
+    getStatusDotClass as getStatusDotClassFor,
+    getHealthBadgeClass,
+} from "../utils/siteStaleness";
 
 export default function SiteCard({ site, viewMode = "grid", onViewDetails }) {
+    const sitesContext = useSitesContext();
+    const contextUpdates = sitesContext?.updatesBySite?.[site.site_name];
+    const isCheckingUpdates = Boolean(sitesContext?.inFlightChecks?.has(site.site_name));
+
     const [healthStatus, setHealthStatus] = useState("Loading");
     const [loadingHealth, setLoadingHealth] = useState(false);
     const [latestCheckId, setLatestCheckId] = useState(null);
     const [latestSnapshot, setLatestSnapshot] = useState(null);
-    const [updateInfo, setUpdateInfo] = useState(site.update_summary || null);
+    const [updateInfo, setUpdateInfo] = useState(contextUpdates || site.update_summary || null);
     const [screenshotUrl, setScreenshotUrl] = useState(null);
     const [capturingSnapshot, setCapturingSnapshot] = useState(false);
+
+    // Sync from context when context updates
+    useEffect(() => {
+        if (contextUpdates) {
+            setUpdateInfo(contextUpdates);
+        }
+    }, [contextUpdates]);
 
     const fetchHealth = async (forceCheck = false) => {
         setLoadingHealth(true);
@@ -94,18 +113,26 @@ export default function SiteCard({ site, viewMode = "grid", onViewDetails }) {
     useEffect(() => {
         if (site.update_summary) {
             setUpdateInfo(site.update_summary);
+            if (sitesContext?.setSiteUpdates) {
+                sitesContext.setSiteUpdates(site.site_name, site.update_summary);
+            }
         }
         const fetchUpdatesInfo = async () => {
             try {
                 const data = await api.checkUpdates(site.site_name, false);
                 if (data) {
                     setUpdateInfo(data);
+                    if (sitesContext?.setSiteUpdates) {
+                        sitesContext.setSiteUpdates(site.site_name, data);
+                    }
                 }
             } catch (error) {
                 console.debug("No cached update info available for", site.site_name, error);
             }
         };
-        fetchUpdatesInfo();
+        if (!contextUpdates) {
+            fetchUpdatesInfo();
+        }
     }, [site.site_name, site.update_summary]);
 
     // Load screenshot via authenticated blob request
@@ -141,68 +168,10 @@ export default function SiteCard({ site, viewMode = "grid", onViewDetails }) {
     }, [latestSnapshot, site.site_name]);
 
     // Staleness calculations
-    const getDaysSinceLastUpdateCheck = () => {
-        if (!updateInfo || !updateInfo.timestamp) return Infinity;
-        const checkDate = new Date(updateInfo.timestamp);
-        if (isNaN(checkDate.getTime())) return Infinity;
-        const diffMs = Date.now() - checkDate.getTime();
-        return Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
-    };
-
-    const daysSinceCheck = getDaysSinceLastUpdateCheck();
-
-    const getUpdateStalenessTooltip = () => {
-        if (!updateInfo || !updateInfo.timestamp || daysSinceCheck === Infinity) {
-            return "Last update check: Never run. Update status is unverified.";
-        }
-        const formattedDate = new Date(updateInfo.timestamp).toLocaleDateString(undefined, {
-            month: 'short', day: 'numeric', year: 'numeric'
-        });
-        if (daysSinceCheck <= 7) {
-            return `Last update check: ${formattedDate} (${daysSinceCheck === 0 ? 'today' : daysSinceCheck + 'd ago'}) - Fresh`;
-        }
-        if (daysSinceCheck <= 30) {
-            return `Last update check: ${formattedDate} (${daysSinceCheck}d ago) - Stale (>7 days)`;
-        }
-        return `Last update check: ${formattedDate} (${daysSinceCheck}d ago) - Very Stale (>30 days)`;
-    };
-
-    const getStatusDotClass = () => {
-        if (daysSinceCheck <= 7) return "status-circle-green";
-        if (daysSinceCheck <= 30) return "status-circle-yellow";
-        return "status-circle-orange";
-    };
-
-    // Health badge keeps UPPERCASE
-    const getHealthBadgeClass = (status) => {
-        switch ((status || "").toLowerCase()) {
-            case "healthy":
-            case "healthy*":
-            case "healthy with exception":
-            case "ok":
-            case "success":
-            case "pass":
-                return "badge badge-success";
-            case "notice":
-            case "minor issues":
-            case "info":
-                return "badge badge-info";
-            case "checking...":
-            case "loading":
-            case "warning":
-            case "degraded":
-            case "in progress":
-                return "badge badge-warning";
-            case "archived":
-            case "neutral":
-                return "badge badge-neutral";
-            case "error":
-            case "failed":
-            case "critical":
-            default:
-                return "badge badge-error";
-        }
-    };
+    const daysSinceCheck = getDaysSinceLastUpdateCheck(updateInfo);
+    const getLastCheckedLabel = () => getLastCheckedLabelFor(updateInfo);
+    const getUpdateStalenessTooltip = () => getUpdateStalenessTooltipFor(updateInfo);
+    const getStatusDotClass = () => getStatusDotClassFor(updateInfo);
 
     // All other tags are smaller & lowercase
     const renderVulnerabilityStatus = () => {
@@ -223,6 +192,15 @@ export default function SiteCard({ site, viewMode = "grid", onViewDetails }) {
     };
 
     const renderUpdateStatus = () => {
+        if (isCheckingUpdates) {
+            return (
+                <span className="badge badge-sm badge-lowercase badge-info" title="Background update check in progress">
+                    <span className="material-symbols-outlined spin-icon" style={{ fontSize: "12px", marginRight: "4px", verticalAlign: "middle" }}>sync</span>
+                    checking...
+                </span>
+            );
+        }
+
         const tooltipText = getUpdateStalenessTooltip();
 
         if (!updateInfo || daysSinceCheck === Infinity) {
@@ -309,6 +287,7 @@ export default function SiteCard({ site, viewMode = "grid", onViewDetails }) {
                         <h3 id={`${site.site_name}-title`} className="row-title-text">{site.display_name}</h3>
                     </div>
                     <span className="row-slug-text">{site.site_name}</span>
+                    <span className="last-checked-label">{getLastCheckedLabel()}</span>
                 </div>
 
                 <div className="row-col-health">
@@ -358,6 +337,7 @@ export default function SiteCard({ site, viewMode = "grid", onViewDetails }) {
                         <h3 id={`${site.site_name}-title`}>{site.display_name}</h3>
                     </div>
                     <span className="site-slug">{site.site_name}</span>
+                    <span className="last-checked-label" title={getUpdateStalenessTooltip()}>{getLastCheckedLabel()}</span>
                 </div>
                 <span 
                     className={`${healthBadgeClass} site-health-badge`} 

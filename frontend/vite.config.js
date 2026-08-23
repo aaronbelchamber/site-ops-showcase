@@ -8,6 +8,11 @@ export default defineConfig({
     outDir: '../static',
     emptyOutDir: true,
   },
+  test: {
+    environment: 'jsdom',
+    globals: true,
+    setupFiles: ['./src/test/setup.js'],
+  },
   server: {
     host: '127.0.0.1',
     port: 5173,

@@ -2,25 +2,6 @@ import React, { useState, useEffect } from "react";
 import api from "../services/api";
 import { showToast } from "../services/toast";
 
-const arePathsEqual = (pathA, pathB, homeDir) => {
-    if (!pathA || !pathB) return false;
-    
-    const norm = (p) => {
-        let res = p.replace(/\\/g, "/").trim();
-        if (homeDir) {
-            if (res.startsWith("~/")) {
-                res = homeDir.replace(/\\/g, "/") + res.substring(1);
-            }
-        }
-        if (res.endsWith("/")) {
-            res = res.slice(0, -1);
-        }
-        return res.toLowerCase();
-    };
-    
-    return norm(pathA) === norm(pathB);
-};
-
 export default function AddSiteForm({ siteToEdit, siteNameFromUrl, cloneFrom, onCancel, onSuccess, onDeleteSuccess, onManageProfiles }) {
     const isCloneMode = !!cloneFrom || (siteToEdit && siteToEdit.isClone);
     const isEditMode = (!!siteToEdit || !!siteNameFromUrl) && !isCloneMode;

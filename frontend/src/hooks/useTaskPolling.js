@@ -6,10 +6,13 @@ export function useTaskPolling() {
     const [activeTasks, setActiveTasks] = useState({});
     const intervalsRef = useRef({});
 
-    // Cleanup intervals on unmount
+    const timeoutsRef = useRef({});
+
+    // Cleanup intervals and timeouts on unmount
     useEffect(() => {
         return () => {
             Object.values(intervalsRef.current).forEach(clearInterval);
+            Object.values(timeoutsRef.current).forEach(clearTimeout);
         };
     }, []);
 
@@ -80,8 +83,23 @@ export function useTaskPolling() {
         });
     };
 
+    const pollTaskWithDelay = (taskId, successMsg, callback, delayMs = 0) => {
+        if (activeTasks[taskId]) return;
+
+        if (delayMs > 0) {
+            const timeoutId = setTimeout(() => {
+                delete timeoutsRef.current[taskId];
+                pollTask(taskId, successMsg, callback);
+            }, delayMs);
+            timeoutsRef.current[taskId] = timeoutId;
+        } else {
+            pollTask(taskId, successMsg, callback);
+        }
+    };
+
     return {
         pollTask,
+        pollTaskWithDelay,
         isPolling: Object.keys(activeTasks).length > 0,
         activeTasks
     };

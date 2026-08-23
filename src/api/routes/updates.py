@@ -8,7 +8,7 @@ from src.execution import get_executor
 from src.wp.cli import WPCLI
 from src.update.manager import UpdateManager
 from src.api.auth import require_api_key
-from src.api.tasks import start_task
+from src.api.tasks import start_task, operation_in_progress_response
 
 updates_bp = Blueprint("updates", __name__)
 
@@ -65,7 +65,61 @@ class UpdateTaskRunner:
         finally:
             executor.disconnect()
 
+    @staticmethod
+    def run_git_init_task(site_name: str, force: bool = False):
+        sites = load_sites_config()
+        site_config = {**sites[site_name], "site_name": site_name}
+        credentials = load_credentials()
+        executor = get_executor(site_config, credentials)
+        try:
+            from src.git.manager import GitManager
+            git_mgr = GitManager(site_config, executor)
+            return git_mgr.init_repo(force=force)
+        finally:
+            executor.disconnect()
+
+    @staticmethod
+    def run_git_push_task(site_name: str):
+        sites = load_sites_config()
+        site_config = {**sites[site_name], "site_name": site_name}
+        credentials = load_credentials()
+        executor = get_executor(site_config, credentials)
+        try:
+            from src.git.manager import GitManager
+            git_mgr = GitManager(site_config, executor)
+            return git_mgr.push_to_github()
+        finally:
+            executor.disconnect()
+
+    @staticmethod
+    def run_check_updates_task(site_name: str):
+        sites = load_sites_config()
+        site_config = sites[site_name]
+        credentials = load_credentials()
+        site_config_with_name = {**site_config, "site_name": site_name}
+        executor = get_executor(site_config_with_name, credentials)
+        try:
+            wp_cli = WPCLI(executor, site_config["wp_path"], site_config.get("wp_cli_path"))
+            mgr = UpdateManager(site_config, credentials, executor, wp_cli)
+            updates_data = mgr.check_all_updates()
+            mgr.save_cached_updates(updates_data)
+            return updates_data
+        finally:
+            executor.disconnect()
+
 class UpdatesController:
+    @staticmethod
+    def _is_stale(timestamp_str: Optional[str]) -> bool:
+        if not timestamp_str:
+            return True
+        try:
+            # Parse ISO timestamp like 2026-08-08T19:00:00Z or similar
+            parsed_time = time.strptime(timestamp_str.split(".")[0].replace("Z", ""), "%Y-%m-%dT%H:%M:%S")
+            age_seconds = time.time() - time.mktime(parsed_time)
+            return age_seconds > (24 * 3600)
+        except Exception:
+            return True
+
     @staticmethod
     @require_api_key
     def get_updates(site_name):
@@ -75,65 +129,49 @@ class UpdatesController:
                 return jsonify({"success": False, "data": None, "error": f"Site '{site_name}' not found.", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 404
                 
             force = request.args.get("force", "false").lower() == "true"
+            is_async = request.args.get("async", "false").lower() == "true" or request.args.get("background", "false").lower() == "true"
             
-            # If not forcing a re-run, try to load from cache first (even for non-Ready sites)
+            # If not forcing a re-run, check if we have a fresh (non-stale) cache
             if not force:
                 cache_file = os.path.join(PROJECT_ROOT, "logs", "updates", f"last_check_{site_name}.json")
                 if os.path.exists(cache_file):
                     try:
                         with open(cache_file, "r", encoding="utf-8") as f:
                             cached_data = json.load(f)
-                        return jsonify({
-                            "success": True,
-                            "data": cached_data,
-                            "error": None,
-                            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                        })
+                        is_stale = UpdatesController._is_stale(cached_data.get("timestamp"))
+                        cached_data["is_stale"] = is_stale
+                        if not is_stale:
+                            return jsonify({
+                                "success": True,
+                                "data": cached_data,
+                                "error": None,
+                                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                            })
                     except Exception:
                         pass
                 
-                # If cache file doesn't exist, try constructing it from the latest update history entry
-                history_file = os.path.join(PROJECT_ROOT, "logs", "updates", f"{site_name}.jsonl")
-                if os.path.exists(history_file):
-                    latest_timestamp = None
-                    try:
-                        with open(history_file, "r", encoding="utf-8") as f:
-                            lines = [line.strip() for line in f if line.strip()]
-                            if lines:
-                                last_entry = json.loads(lines[-1])
-                                latest_timestamp = last_entry.get("timestamp")
-                    except Exception:
-                        pass
-
-                    if latest_timestamp:
-                        fallback_data = {
-                            "site_name": site_name,
-                            "timestamp": latest_timestamp,
-                            "core": {"update_available": False, "details": None},
-                            "plugins": {"updates_available": False, "plugins": []},
-                            "themes": {"updates_available": False, "themes": []}
-                        }
+                # If site is not Ready, we should not attempt a live check; return cached/fallback
+                site_config = sites[site_name]
+                if site_config.get("status", "Ready") != "Ready":
+                    if os.path.exists(cache_file):
                         try:
-                            os.makedirs(os.path.dirname(cache_file), exist_ok=True)
-                            with open(cache_file, "w", encoding="utf-8") as cf:
-                                json.dump(fallback_data, cf, indent=2)
+                            with open(cache_file, "r", encoding="utf-8") as f:
+                                cached_data = json.load(f)
+                            cached_data["is_stale"] = UpdatesController._is_stale(cached_data.get("timestamp"))
+                            return jsonify({
+                                "success": True,
+                                "data": cached_data,
+                                "error": None,
+                                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                            })
                         except Exception:
                             pass
-
-                        return jsonify({
-                            "success": True,
-                            "data": fallback_data,
-                            "error": None,
-                            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                        })
-
-                # If neither cache nor history exists, return success with data: None
-                return jsonify({
-                    "success": True,
-                    "data": None,
-                    "error": None,
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                })
+                    return jsonify({
+                        "success": True,
+                        "data": {"is_stale": True, "site_name": site_name, "timestamp": None},
+                        "error": None,
+                        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                    })
 
             site_config = sites[site_name]
             if site_config.get("status", "Ready") != "Ready":
@@ -153,7 +191,22 @@ class UpdatesController:
                     "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
                 }), 400
 
-            # If force=true, connect and run the updates check
+            if is_async:
+                task_id = start_task(
+                    f"Check updates for {site_name}",
+                    UpdateTaskRunner.run_check_updates_task,
+                    site_name=site_name
+                )
+                if task_id is None:
+                    return operation_in_progress_response(site_name)
+                return jsonify({
+                    "success": True,
+                    "data": {"task_id": task_id, "status": "running"},
+                    "error": None,
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                })
+
+            # If synchronous force=true, connect and run the updates check
             credentials = load_credentials()
             site_config_with_name = {**site_config, "site_name": site_name}
             executor = get_executor(site_config_with_name, credentials)
@@ -162,6 +215,7 @@ class UpdatesController:
                 wp_cli = WPCLI(executor, wp_path, site_config.get("wp_cli_path"))
                 mgr = UpdateManager(site_config, credentials, executor, wp_cli)
                 updates_data = mgr.check_all_updates()
+                updates_data["is_stale"] = False
                 
                 # Save to cache
                 mgr.save_cached_updates(updates_data)
@@ -220,7 +274,10 @@ class UpdatesController:
                 create_backup=create_backup,
                 quality_checks=quality_checks
             )
-            
+
+            if task_id is None:
+                return operation_in_progress_response(site_name)
+
             return jsonify({
                 "success": True,
                 "data": {"task_id": task_id, "status": "running"},
@@ -273,7 +330,10 @@ class UpdatesController:
                 create_backup=create_backup,
                 quality_checks=quality_checks
             )
-            
+
+            if task_id is None:
+                return operation_in_progress_response(site_name)
+
             return jsonify({
                 "success": True,
                 "data": {"task_id": task_id, "status": "running"},
@@ -326,7 +386,10 @@ class UpdatesController:
                 create_backup=create_backup,
                 quality_checks=quality_checks
             )
-            
+
+            if task_id is None:
+                return operation_in_progress_response(site_name)
+
             return jsonify({
                 "success": True,
                 "data": {"task_id": task_id, "status": "running"},
@@ -376,7 +439,187 @@ class UpdatesController:
                 create_backup=create_backup,
                 quality_checks=quality_checks
             )
-            
+
+            if task_id is None:
+                return operation_in_progress_response(site_name)
+
+            return jsonify({
+                "success": True,
+                "data": {"task_id": task_id, "status": "running"},
+                "error": None,
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            })
+        except Exception as e:
+            return jsonify({
+                "success": False,
+                "data": None,
+                "error": str(e),
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            }), 500
+
+    @staticmethod
+    @require_api_key
+    def trigger_check_updates(site_name):
+        try:
+            sites = load_sites_config()
+            if site_name not in sites:
+                return jsonify({"success": False, "data": None, "error": f"Site '{site_name}' not found.", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 404
+                
+            site_config = sites[site_name]
+            if site_config.get("status", "Ready") != "Ready":
+                return jsonify({
+                    "success": False,
+                    "data": None,
+                    "error": f"Site '{site_name}' has status '{site_config.get('status', 'Ready')}'. Operations are only permitted on sites with 'Ready' status.",
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                }), 400
+                
+            wp_path = site_config.get("wp_path")
+            if not wp_path:
+                return jsonify({
+                    "success": False,
+                    "data": None,
+                    "error": f"WordPress path (wp_path) is not configured for site '{site_name}'. Please edit the site configuration first.",
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                }), 400
+
+            task_id = start_task(
+                name=f"Check updates for {site_name}",
+                func=UpdateTaskRunner.run_check_updates_task,
+                site_name=site_name
+            )
+            if task_id is None:
+                return operation_in_progress_response(site_name)
+            return jsonify({
+                "success": True,
+                "data": {"task_id": task_id, "status": "running"},
+                "error": None,
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            })
+        except Exception as e:
+            return jsonify({
+                "success": False,
+                "data": None,
+                "error": str(e),
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            }), 500
+
+    @staticmethod
+    @require_api_key
+    def get_git_status(site_name):
+        try:
+            sites = load_sites_config()
+            if site_name not in sites:
+                return jsonify({
+                    "success": False,
+                    "data": None,
+                    "error": f"Site '{site_name}' not found",
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                }), 404
+
+            site_config = {**sites[site_name], "site_name": site_name}
+            credentials = load_credentials()
+            executor = get_executor(site_config, credentials)
+            try:
+                from src.git.manager import GitManager
+                git_mgr = GitManager(site_config, executor)
+                status = git_mgr.get_repo_status()
+                return jsonify({
+                    "success": True,
+                    "data": status,
+                    "error": None,
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                })
+            finally:
+                executor.disconnect()
+        except Exception as e:
+            return jsonify({
+                "success": False,
+                "data": None,
+                "error": str(e),
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            }), 500
+
+    @staticmethod
+    @require_api_key
+    def trigger_git_init(site_name):
+        try:
+            sites = load_sites_config()
+            if site_name not in sites:
+                return jsonify({
+                    "success": False,
+                    "data": None,
+                    "error": f"Site '{site_name}' not found",
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                }), 404
+
+            site_config = sites[site_name]
+            if site_config.get("status") != "Ready":
+                return jsonify({
+                    "success": False,
+                    "data": None,
+                    "error": f"Site status is '{site_config.get('status')}', but must be 'Ready' to initialize Git.",
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                }), 400
+
+            data = request.get_json(silent=True) or {}
+            force = data.get("force", False)
+
+            task_id = start_task(
+                name=f"Initialize Git repository for {site_name}",
+                func=UpdateTaskRunner.run_git_init_task,
+                site_name=site_name,
+                force=force
+            )
+
+            if task_id is None:
+                return operation_in_progress_response(site_name)
+
+            return jsonify({
+                "success": True,
+                "data": {"task_id": task_id, "status": "running"},
+                "error": None,
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            })
+        except Exception as e:
+            return jsonify({
+                "success": False,
+                "data": None,
+                "error": str(e),
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            }), 500
+
+    @staticmethod
+    @require_api_key
+    def trigger_git_push(site_name):
+        try:
+            sites = load_sites_config()
+            if site_name not in sites:
+                return jsonify({
+                    "success": False,
+                    "data": None,
+                    "error": f"Site '{site_name}' not found",
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                }), 404
+
+            site_config = sites[site_name]
+            if site_config.get("status") != "Ready":
+                return jsonify({
+                    "success": False,
+                    "data": None,
+                    "error": f"Site status is '{site_config.get('status')}', but must be 'Ready' to push Git repo.",
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                }), 400
+
+            task_id = start_task(
+                name=f"Git push for {site_name}",
+                func=UpdateTaskRunner.run_git_push_task,
+                site_name=site_name
+            )
+
+            if task_id is None:
+                return operation_in_progress_response(site_name)
+
             return jsonify({
                 "success": True,
                 "data": {"task_id": task_id, "status": "running"},
@@ -413,8 +656,14 @@ class UpdatesController:
 
 # Route mappings (updates_bp registered with url_prefix="/api/sites" in app.py)
 updates_bp.add_url_rule("/<site_name>/updates", view_func=UpdatesController.get_updates, methods=["GET"])
+updates_bp.add_url_rule("/<site_name>/updates/check", view_func=UpdatesController.trigger_check_updates, methods=["POST"])
 updates_bp.add_url_rule("/<site_name>/updates/core", view_func=UpdatesController.update_core, methods=["POST"])
 updates_bp.add_url_rule("/<site_name>/updates/plugins", view_func=UpdatesController.update_plugins, methods=["POST"])
 updates_bp.add_url_rule("/<site_name>/updates/themes", view_func=UpdatesController.update_themes, methods=["POST"])
 updates_bp.add_url_rule("/<site_name>/updates/all", view_func=UpdatesController.update_all, methods=["POST"])
 updates_bp.add_url_rule("/<site_name>/updates/history", view_func=UpdatesController.get_update_history, methods=["GET"])
+
+# Git routes
+updates_bp.add_url_rule("/<site_name>/git/status", view_func=UpdatesController.get_git_status, methods=["GET"])
+updates_bp.add_url_rule("/<site_name>/git/init", view_func=UpdatesController.trigger_git_init, methods=["POST"])
+updates_bp.add_url_rule("/<site_name>/git/push", view_func=UpdatesController.trigger_git_push, methods=["POST"])

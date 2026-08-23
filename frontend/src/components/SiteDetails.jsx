@@ -1,13 +1,15 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import api from "../services/api";
 import { showToast } from "../services/toast";
 import { useTaskPolling } from "../hooks/useTaskPolling";
+import { useSitesContext } from "../context/SitesContext";
 
 import UserManagementTab from "./UserManagementTab";
 import SecurityScanTab from "./SecurityScanTab";
 import ImageLightbox from "./ImageLightbox";
 
 export default function SiteDetails({ siteName, onBack, onEditClick, onCloneClick }) {
+    const sitesContext = useSitesContext();
     const [site, setSite] = useState(null);
     const [activeTab, setActiveTab] = useState(() => new URLSearchParams(window.location.search).get("tab") || "overview");
 
@@ -43,6 +45,8 @@ export default function SiteDetails({ siteName, onBack, onEditClick, onCloneClic
     const [snapshotMobileUrl, setSnapshotMobileUrl] = useState(null);
     const [lightboxImage, setLightboxImage] = useState(null);
     const [updatesHistory, setUpdatesHistory] = useState([]);
+    const [gitStatus, setGitStatus] = useState(null);
+    const [loadingGit, setLoadingGit] = useState(false);
 
     const [loadingDetails, setLoadingDetails] = useState(true);
     const [loadingBackups, setLoadingBackups] = useState(false);
@@ -53,12 +57,170 @@ export default function SiteDetails({ siteName, onBack, onEditClick, onCloneClic
 
     const { pollTask, activeTasks } = useTaskPolling();
 
-    const siteTasks = Object.values(activeTasks).filter(task => 
+    const siteTasks = Object.values(activeTasks).filter(task =>
         task.name && task.name.includes(siteName)
     );
     const hasRunningTask = siteTasks.some(task => task.status === "running");
 
+    const fetchBackups = async () => {
+        setLoadingBackups(true);
+        try {
+            const data = await api.getBackups(siteName);
+            setBackups(data);
+        } catch (error) {
+            console.error("Failed to load backups:", error);
+        } finally {
+            setLoadingBackups(false);
+        }
+    };
+
+    const fetchHealthHistory = async () => {
+        setLoadingHealth(true);
+        try {
+            const data = await api.getHealthHistory(siteName);
+            setHealthHistory(data);
+        } catch (error) {
+            console.error("Failed to load health history:", error);
+        } finally {
+            setLoadingHealth(false);
+        }
+    };
+
+    const fetchUpdates = async (force = false) => {
+        setCheckingUpdates(true);
+        try {
+            let data = await api.checkUpdates(siteName, force);
+            if (!force && !data) {
+                try {
+                    data = await api.checkUpdates(siteName, true);
+                } catch (e) {
+                    console.debug("Auto updates-check backfill failed in SiteDetails for", siteName, e);
+                }
+            }
+            setUpdateOffers(data);
+            if (data && sitesContext?.setSiteUpdates) {
+                sitesContext.setSiteUpdates(siteName, data);
+            }
+        } catch (error) {
+            console.error("Failed to check updates:", error);
+            showToast(`Failed to check updates: ${error.message}`, "error");
+        } finally {
+            setCheckingUpdates(false);
+        }
+    };
+
+    const fetchUpdatesHistory = async () => {
+        setLoadingUpdatesHistory(true);
+        try {
+            const data = await api.getUpdateHistory(siteName);
+            setUpdatesHistory(data);
+        } catch (error) {
+            console.error("Failed to load updates history:", error);
+        } finally {
+            setLoadingUpdatesHistory(false);
+        }
+    };
+
+    const fetchGitStatus = async () => {
+        setLoadingGit(true);
+        try {
+            const data = await api.getGitStatus(siteName);
+            setGitStatus(data);
+        } catch (error) {
+            console.error("Failed to load git status:", error);
+        } finally {
+            setLoadingGit(false);
+        }
+    };
+
+    const fetchLatestSnapshot = async () => {
+        setLoadingHealth(true);
+        try {
+            let data = await api.getLatestSnapshot(siteName);
+            let hasScreenshot = data && data.id && (data.checks?.http?.screenshots?.desktop || data.checks?.http?.screenshots);
+
+            if (!data || !hasScreenshot) {
+                try {
+                    data = await api.runHealthCheck(siteName);
+                } catch (e) {
+                    console.debug("Auto snapshot backfill failed in SiteDetails for", siteName, e);
+                }
+            }
+
+            setLatestSnapshot(data);
+
+            if (snapshotDesktopUrl) URL.revokeObjectURL(snapshotDesktopUrl);
+            if (snapshotMobileUrl) URL.revokeObjectURL(snapshotMobileUrl);
+            setSnapshotDesktopUrl(null);
+            setSnapshotMobileUrl(null);
+
+            if (data && data.id) {
+                try {
+                    const desktopBlob = await api.getScreenshotBlob(siteName, data.id, "desktop");
+                    setSnapshotDesktopUrl(URL.createObjectURL(desktopBlob));
+                } catch (e) {
+                    console.error("Failed to load snapshot desktop img", e);
+                }
+                try {
+                    const mobileBlob = await api.getScreenshotBlob(siteName, data.id, "mobile");
+                    setSnapshotMobileUrl(URL.createObjectURL(mobileBlob));
+                } catch (e) {
+                    console.error("Failed to load snapshot mobile img", e);
+                }
+            }
+        } catch (error) {
+            console.error("Failed to fetch latest snapshot:", error);
+        } finally {
+            setLoadingHealth(false);
+        }
+    };
+
+    const fetchAllData = async () => {
+        setLoadingDetails(true);
+        try {
+            const siteData = await api.getSite(siteName);
+            setSite(siteData);
+            setIncludeMedia(false);
+            setLoadingDetails(false);
+
+            fetchHealthHistory();
+
+            if (siteData.status === "Ready") {
+                fetchBackups();
+                fetchUpdates();
+                fetchLatestSnapshot();
+                fetchUpdatesHistory();
+                fetchGitStatus();
+            } else {
+                setBackups([]);
+                setUpdateOffers(null);
+                setLatestSnapshot(null);
+                setUpdatesHistory([]);
+                setGitStatus(null);
+            }
+        } catch (error) {
+            showToast(`Failed to load details: ${error.message}`, "error");
+            onBack();
+        }
+    };
+
     const getTaskConfig = (taskName) => {
+        if (taskName.includes("Initialize Git")) {
+            return {
+                successMsg: "Git repository initialized successfully!",
+                callback: () => {
+                    fetchGitStatus();
+                }
+            };
+        }
+        if (taskName.includes("Git push")) {
+            return {
+                successMsg: "Git repository pushed successfully!",
+                callback: () => {
+                    fetchGitStatus();
+                }
+            };
+        }
         if (taskName.includes("Update All")) {
             return {
                 successMsg: "All updates applied successfully!",
@@ -151,124 +313,88 @@ export default function SiteDetails({ siteName, onBack, onEditClick, onCloneClic
         resumeActiveTasks();
     }, [siteName]);
 
-    const fetchAllData = async () => {
-        setLoadingDetails(true);
-        try {
-            const siteData = await api.getSite(siteName);
-            setSite(siteData);
-            setIncludeMedia(false);
-            setLoadingDetails(false);
+    useEffect(() => {
+        let cancelled = false;
 
-            fetchHealthHistory();
+        (async () => {
+            setLoadingDetails(true);
+            try {
+                const siteData = await api.getSite(siteName);
+                if (!cancelled) setSite(siteData);
+                if (!cancelled) setIncludeMedia(false);
+                if (!cancelled) setLoadingDetails(false);
 
-            if (siteData.status === "Ready") {
-                fetchBackups();
-                fetchUpdates();
-                fetchLatestSnapshot();
-                fetchUpdatesHistory();
-            } else {
-                setBackups([]);
-                setUpdateOffers(null);
-                setLatestSnapshot(null);
-                setUpdatesHistory([]);
-            }
-        } catch (error) {
-            showToast(`Failed to load details: ${error.message}`, "error");
-            onBack();
-        }
-    };
-
-    const fetchUpdatesHistory = async () => {
-        setLoadingUpdatesHistory(true);
-        try {
-            const data = await api.getUpdateHistory(siteName);
-            setUpdatesHistory(data);
-        } catch (error) {
-            console.error("Failed to load updates history:", error);
-        } finally {
-            setLoadingUpdatesHistory(false);
-        }
-    };
-
-    const fetchBackups = async () => {
-        setLoadingBackups(true);
-        try {
-            const data = await api.getBackups(siteName);
-            setBackups(data);
-        } catch (error) {
-            console.error("Failed to load backups:", error);
-        } finally {
-            setLoadingBackups(false);
-        }
-    };
-
-    const fetchHealthHistory = async () => {
-        setLoadingHealth(true);
-        try {
-            const data = await api.getHealthHistory(siteName);
-            setHealthHistory(data);
-        } catch (error) {
-            console.error("Failed to load health history:", error);
-        } finally {
-            setLoadingHealth(false);
-        }
-    };
-
-    const fetchUpdates = async (force = false) => {
-        setCheckingUpdates(true);
-        try {
-            const data = await api.checkUpdates(siteName, force);
-            setUpdateOffers(data);
-        } catch (error) {
-            console.error("Failed to check updates:", error);
-            showToast(`Failed to check updates: ${error.message}`, "error");
-        } finally {
-            setCheckingUpdates(false);
-        }
-    };
-
-    const fetchLatestSnapshot = async () => {
-        try {
-            let data = await api.getLatestSnapshot(siteName);
-            let hasScreenshot = data && data.id && (data.checks?.http?.screenshots?.desktop || data.checks?.http?.screenshots);
-
-            if (!data || !hasScreenshot) {
-                try {
-                    data = await api.runHealthCheck(siteName);
-                } catch (e) {
-                    console.debug("Auto snapshot backfill failed in SiteDetails for", siteName, e);
+                if (siteData.status === "Ready") {
+                    // Independent fetches, each writing its own state slice
+                    // and handling its own errors internally.
+                    if (!cancelled) {
+                        await Promise.all([
+                            fetchHealthHistory(),
+                            fetchBackups(),
+                            fetchUpdates(),
+                            fetchLatestSnapshot(),
+                            fetchUpdatesHistory(),
+                            fetchGitStatus()
+                        ]);
+                    }
+                } else {
+                    if (!cancelled) await fetchHealthHistory();
+                    if (!cancelled) {
+                        setBackups([]);
+                        setUpdateOffers(null);
+                        setLatestSnapshot(null);
+                        setUpdatesHistory([]);
+                        setGitStatus(null);
+                    }
                 }
+            } catch (error) {
+                if (!cancelled) showToast(`Failed to load details: ${error.message}`, "error");
+                if (!cancelled) onBack();
             }
+        })();
 
-            setLatestSnapshot(data);
-            
-            if (snapshotDesktopUrl) URL.revokeObjectURL(snapshotDesktopUrl);
-            if (snapshotMobileUrl) URL.revokeObjectURL(snapshotMobileUrl);
-            setSnapshotDesktopUrl(null);
-            setSnapshotMobileUrl(null);
+        return () => {
+            cancelled = true;
+        };
+    }, [siteName]);
 
-            if (data && data.id) {
-                try {
-                    const desktopBlob = await api.getScreenshotBlob(siteName, data.id, "desktop");
-                    setSnapshotDesktopUrl(URL.createObjectURL(desktopBlob));
-                } catch (e) {
-                    console.error("Failed to load snapshot desktop img", e);
-                }
-                try {
-                    const mobileBlob = await api.getScreenshotBlob(siteName, data.id, "mobile");
-                    setSnapshotMobileUrl(URL.createObjectURL(mobileBlob));
-                } catch (e) {
-                    console.error("Failed to load snapshot mobile img", e);
-                }
-            }
-        } catch (error) {
-            console.error("Failed to fetch latest snapshot:", error);
-        }
-    };
+    const snapshotUrlsRef = useRef({ desktop: null, mobile: null });
+    useEffect(() => {
+        snapshotUrlsRef.current = { desktop: snapshotDesktopUrl, mobile: snapshotMobileUrl };
+    }, [snapshotDesktopUrl, snapshotMobileUrl]);
 
     useEffect(() => {
-        fetchAllData();
-    }, [siteName]);
+        // Revoke the last snapshot blob URLs on unmount; fetchLatestSnapshot
+        // already revokes prior URLs itself before setting new ones.
+        return () => {
+            if (snapshotUrlsRef.current.desktop) URL.revokeObjectURL(snapshotUrlsRef.current.desktop);
+            if (snapshotUrlsRef.current.mobile) URL.revokeObjectURL(snapshotUrlsRef.current.mobile);
+        };
+    }, []);
+
+    const handleInitGit = async () => {
+        try {
+            const resp = await api.initGitRepo(siteName);
+            showToast("Git initialization started...", "info");
+            pollTask(resp.task_id, "Git repository initialized successfully!", () => {
+                fetchGitStatus();
+            });
+        } catch (error) {
+            showToast(`Failed to start Git initialization: ${error.message}`, "error");
+        }
+    };
+
+    const handlePushGit = async () => {
+        try {
+            const resp = await api.pushGitRepo(siteName);
+            showToast("Git push started...", "info");
+            pollTask(resp.task_id, "Git repository pushed successfully!", () => {
+                fetchGitStatus();
+            });
+        } catch (error) {
+            showToast(`Failed to start Git push: ${error.message}`, "error");
+        }
+    };
 
     const handleCreateBackup = async () => {
         try {
@@ -570,6 +696,84 @@ export default function SiteDetails({ siteName, onBack, onEditClick, onCloneClic
                             </div>
                         </div>
 
+                        {/* Git Integration Status */}
+                        {site.status === "Ready" && (
+                            <div className="md-card">
+                                <div className="card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                                    <h3>Git Integration</h3>
+                                    <div style={{ display: "flex", gap: "0.5rem" }}>
+                                        {gitStatus && gitStatus.initialized && (
+                                            <button
+                                                className="md-button md-button-tonal md-button-sm"
+                                                disabled={hasRunningTask || loadingGit}
+                                                onClick={handlePushGit}
+                                                title="Push committed updates to remote GitHub repository"
+                                            >
+                                                <span className="material-symbols-outlined" style={{ fontSize: "16px" }}>upload</span> Push Remote
+                                            </button>
+                                        )}
+                                        {gitStatus && !gitStatus.initialized && (
+                                            <button
+                                                className="md-button md-button-primary md-button-sm"
+                                                disabled={hasRunningTask || loadingGit}
+                                                onClick={handleInitGit}
+                                                title="Initialize Git repository and GitHub remote"
+                                            >
+                                                <span className="material-symbols-outlined" style={{ fontSize: "16px" }}>add_circle</span> Initialize Repo
+                                            </button>
+                                        )}
+                                        <button
+                                            className="btn-icon"
+                                            onClick={fetchGitStatus}
+                                            disabled={loadingGit}
+                                            title="Refresh Git status"
+                                        >
+                                            <span className="material-symbols-outlined" style={{ fontSize: "18px" }}>refresh</span>
+                                        </button>
+                                    </div>
+                                </div>
+                                <div style={{ marginTop: "1rem" }}>
+                                    {loadingGit ? (
+                                        <p style={{ color: "var(--md-sys-color-outline)" }}>Loading Git status...</p>
+                                    ) : gitStatus && gitStatus.initialized ? (
+                                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem", fontSize: "0.875rem" }}>
+                                            <div>
+                                                <strong style={{ color: "var(--md-sys-color-outline)" }}>Branch:</strong>
+                                                <div><code>{gitStatus.branch || "main"}</code></div>
+                                            </div>
+                                            <div>
+                                                <strong style={{ color: "var(--md-sys-color-outline)" }}>Remote:</strong>
+                                                <div style={{ wordBreak: "break-all" }}>
+                                                    {gitStatus.remote_url ? (
+                                                        <a href={gitStatus.remote_url.replace(/\.git$/, "")} target="_blank" rel="noopener noreferrer" style={{ color: "var(--md-sys-color-primary)" }}>
+                                                            {gitStatus.remote_url}
+                                                        </a>
+                                                    ) : "None configured"}
+                                                </div>
+                                            </div>
+                                            {gitStatus.last_commit && (
+                                                <div style={{ gridColumn: "1 / -1", marginTop: "0.25rem", padding: "0.5rem", backgroundColor: "var(--md-sys-color-surface-variant)", borderRadius: "6px" }}>
+                                                    <strong style={{ color: "var(--md-sys-color-outline)", display: "block", fontSize: "0.75rem" }}>Latest Commit:</strong>
+                                                    <div style={{ fontFamily: "monospace", fontSize: "0.8rem", marginTop: "0.2rem" }}>
+                                                        [{gitStatus.last_commit.short_hash}] {gitStatus.last_commit.message}
+                                                    </div>
+                                                    <div style={{ fontSize: "0.75rem", color: "var(--md-sys-color-outline)", marginTop: "0.2rem" }}>
+                                                        {gitStatus.last_commit.author} • {new Date(gitStatus.last_commit.date).toLocaleString()}
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    ) : (
+                                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                                            <p style={{ color: "var(--md-sys-color-outline)", margin: 0 }}>
+                                                Git tracking is not yet initialized for this site.
+                                            </p>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+
                         {/* Recent Health History */}
                         <div className="md-card">
                             <div className="card-header">
@@ -624,7 +828,7 @@ export default function SiteDetails({ siteName, onBack, onEditClick, onCloneClic
                                 <button
                                     className="md-button md-button-tonal md-button-sm"
                                     disabled={loadingHealth}
-                                    onClick={() => fetchHealth(true)}
+                                    onClick={() => fetchLatestSnapshot()}
                                     title="Re-run live health check and capture fresh desktop/mobile screenshots"
                                 >
                                     <span className="material-symbols-outlined" style={{ fontSize: "16px" }}>sync</span> Re-run Snapshot
@@ -679,7 +883,7 @@ export default function SiteDetails({ siteName, onBack, onEditClick, onCloneClic
                                     {checkingUpdates ? (
                                         "Scanning WordPress for available updates..."
                                     ) : updateOffers && updateOffers.timestamp ? (
-                                        `Last scan: ${new Date(updateOffers.timestamp).toLocaleString()} (Cached)`
+                                        `Last scan: ${new Date(updateOffers.timestamp).toLocaleString()}${updateOffers.is_stale === false ? "" : " (Cached)"}`
                                     ) : (
                                         "No update scan on record. Click 'Scan Available Updates' to check for changes."
                                     )}
@@ -904,6 +1108,11 @@ export default function SiteDetails({ siteName, onBack, onEditClick, onCloneClic
                                             <div style={{ fontSize: "0.8rem", color: "var(--md-sys-color-outline)", marginTop: "0.2rem" }}>
                                                 {new Date(entry.timestamp).toLocaleString()}
                                             </div>
+                                            {entry.git && entry.git.commit && (
+                                                <div style={{ fontSize: "0.75rem", fontFamily: "monospace", color: "var(--md-sys-color-primary)", marginTop: "0.25rem" }}>
+                                                    git: {entry.git.commit.short_hash} {entry.git.push_success === false ? "(push pending/failed)" : "(pushed)"}
+                                                </div>
+                                            )}
                                             {entry.error && (
                                                 <div style={{ color: "var(--md-sys-color-error)", fontSize: "0.85rem", marginTop: "0.3rem" }}>
                                                     {entry.error}

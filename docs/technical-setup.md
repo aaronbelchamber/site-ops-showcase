@@ -46,6 +46,14 @@ This guide is for developers setting up the WordPress Site Manager project local
    http://127.0.0.1:5173
    ```
 
+## Windows Launch Scripts
+From the repository root, use these shortcuts instead of typing the commands manually:
+
+```bat
+run.bat      :: runs the production-style backend startup
+run_dev.bat  :: starts the backend and frontend dev servers together
+```
+
 ## Local Authentication
 For local browser auto-login, create `frontend/.env.local` with:
 ```env

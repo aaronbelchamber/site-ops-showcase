@@ -202,8 +202,29 @@ class HTTPHealthCheck:
         from playwright.sync_api import sync_playwright
         
         console_errors = []
+        failed_asset_requests = []
         status_code = 0
         start = time.perf_counter()
+
+        # Broken images (a 404'd asset, or one that never got regenerated after a
+        # cache flush/theme change) don't throw a JS error, so page.on("console")
+        # never sees them. Catch them two ways instead, on the same page load
+        # that's already open for the screenshot: any failed image/CSS/JS/font
+        # network response, and any <img> that loaded but rendered at 0 width.
+        MAX_ASSET_ISSUES = 50
+
+        def handle_response(response):
+            try:
+                req = response.request
+                if req.resource_type in ("image", "stylesheet", "script", "font") and response.status >= 400:
+                    if len(failed_asset_requests) < MAX_ASSET_ISSUES:
+                        failed_asset_requests.append({
+                            "url": response.url[:300],
+                            "status": response.status,
+                            "resource_type": req.resource_type,
+                        })
+            except Exception:
+                pass
 
         def handle_console(msg):
             if msg.type == "error":
@@ -240,12 +261,21 @@ class HTTPHealthCheck:
                 )
                 desktop_page = desktop_context.new_page()
                 desktop_page.on("console", handle_console)
-                
+                desktop_page.on("response", handle_response)
+
                 response = desktop_page.goto(self.url, timeout=timeout_ms, wait_until="load")
                 if response:
                     status_code = response.status
-                
+
                 desktop_page.wait_for_timeout(500)
+
+                broken_images = desktop_page.evaluate("""
+                    () => Array.from(document.images)
+                        .filter(img => img.naturalWidth === 0 && img.src)
+                        .slice(0, 50)
+                        .map(img => ({ src: (img.currentSrc || img.src).slice(0, 300), alt: (img.alt || "").slice(0, 150) }))
+                """)
+
                 desktop_page.screenshot(path=desktop_path)
                 desktop_context.close()
                 
@@ -270,17 +300,20 @@ class HTTPHealthCheck:
             # Enrich raw errors with severity + fingerprint
             enriched_errors = ConsoleErrorClassifier.enrich(console_errors)
 
-            # A health check fails only if there are non-ignored errors or a bad status code
+            # A health check fails only if there are non-ignored errors, a bad status
+            # code, or a broken image/asset was detected on the page.
             unacknowledged_errors = [e for e in enriched_errors if e["severity"] != "ignored"]
             status = "pass"
-            if status_code > 302 or status_code == 0 or len(unacknowledged_errors) > 0:
+            if status_code > 302 or status_code == 0 or unacknowledged_errors or broken_images or failed_asset_requests:
                 status = "fail"
-                
+
             return {
                 "status_code": status_code,
                 "response_time_ms": duration_ms,
                 "status": status,
                 "console_errors": enriched_errors,
+                "broken_images": broken_images,
+                "failed_asset_requests": failed_asset_requests,
                 "screenshots": {
                     "year_month": year_month,
                     "desktop": desktop_filename,
@@ -295,6 +328,8 @@ class HTTPHealthCheck:
                 "response_time_ms": duration_ms,
                 "status": "fail",
                 "console_errors": console_errors,
+                "broken_images": [],
+                "failed_asset_requests": failed_asset_requests,
                 "screenshots": None,
                 "error": str(e)
             }

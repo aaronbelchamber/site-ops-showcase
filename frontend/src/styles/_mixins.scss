@@ -1,0 +1,33 @@
+// ==========================================
+// SCSS Mixins & Utilities
+// ==========================================
+@use './tokens' as *;
+
+// --- Responsive Breakpoint Mixin ---
+@mixin respond-to($breakpoint) {
+    @if $breakpoint == sm {
+        @media (max-width: #{$bp-sm}) { @content; }
+    } @else if $breakpoint == md {
+        @media (max-width: #{$bp-md}) { @content; }
+    } @else if $breakpoint == lg {
+        @media (max-width: #{$bp-lg}) { @content; }
+    } @else if $breakpoint == xl {
+        @media (max-width: #{$bp-xl}) { @content; }
+    } @else {
+        @media (max-width: #{$breakpoint}) { @content; }
+    }
+}
+
+// --- Flexbox Centering Helper ---
+@mixin flex-center {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+// --- Text Truncate Helper ---
+@mixin text-truncate {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}

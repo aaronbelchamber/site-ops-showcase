@@ -7,9 +7,11 @@ from src.wp.cli import WPCLI
 from src.backup.manager import BackupManager
 from src.health.manager import HealthCheckManager
 from src.execution.base import BaseExecutor
+from src.wp.cache import CacheManager
 from src.update.core import CoreUpdater
 from src.update.plugins import PluginUpdater
 from src.update.themes import ThemeUpdater
+from src.git.manager import GitManager
 
 class UpdateManager:
     def __init__(self, site_config: Dict[str, Any], credentials: Dict[str, Any], executor: BaseExecutor, wp_cli: WPCLI):
@@ -22,17 +24,92 @@ class UpdateManager:
         # Initialize dependencies
         self.backup_manager = BackupManager(site_config, credentials, executor)
         self.health_manager = HealthCheckManager(site_config, executor, wp_cli)
+        self.cache_manager = CacheManager(site_config, wp_cli)
+        self.git_manager = GitManager(site_config, executor)
         
         # Initialize updater components
-        self.core_updater = CoreUpdater(wp_cli, self.backup_manager, self.health_manager)
-        self.plugin_updater = PluginUpdater(wp_cli, self.backup_manager, self.health_manager)
-        self.theme_updater = ThemeUpdater(wp_cli, self.backup_manager, self.health_manager)
+        self.core_updater = CoreUpdater(wp_cli, self.backup_manager, self.health_manager, site_config=site_config, credentials=credentials, executor=executor, cache_manager=self.cache_manager)
+        self.plugin_updater = PluginUpdater(wp_cli, self.backup_manager, self.health_manager, site_config=site_config, credentials=credentials, executor=executor, cache_manager=self.cache_manager)
+        self.theme_updater = ThemeUpdater(wp_cli, self.backup_manager, self.health_manager, site_config=site_config, credentials=credentials, executor=executor, cache_manager=self.cache_manager)
         
         # Log directory
         src_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         project_root = os.path.dirname(src_dir)
         self.updates_log_dir = os.path.join(project_root, "logs", "updates")
         self.log_file = os.path.join(self.updates_log_dir, f"{self.site_name}.jsonl")
+
+    def capture_versions(self) -> Dict[str, Any]:
+        """Capture currently installed core, plugin, and theme versions."""
+        versions = {
+            "core_version": None,
+            "plugins": {},
+            "themes": {}
+        }
+        try:
+            core_res = self.wp_cli.run_command(["core", "version"])
+            if core_res.success and core_res.stdout:
+                versions["core_version"] = core_res.stdout.strip()
+        except Exception:
+            pass
+
+        try:
+            plugins_res = self.wp_cli.run_command(["plugin", "list", "--fields=name,version"], parse_json=True)
+            if plugins_res.success and isinstance(plugins_res.data, list):
+                for p in plugins_res.data:
+                    if isinstance(p, dict) and "name" in p and "version" in p:
+                        versions["plugins"][p["name"]] = p["version"]
+        except Exception:
+            pass
+
+        try:
+            themes_res = self.wp_cli.run_command(["theme", "list", "--fields=name,version"], parse_json=True)
+            if themes_res.success and isinstance(themes_res.data, list):
+                for t in themes_res.data:
+                    if isinstance(t, dict) and "name" in t and "version" in t:
+                        versions["themes"][t["name"]] = t["version"]
+        except Exception:
+            pass
+
+        return versions
+
+    def _handle_git_integration(
+        self,
+        update_res: Dict[str, Any],
+        versions_before: Optional[Dict[str, Any]] = None,
+        versions_after: Optional[Dict[str, Any]] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Handle Git commit and push if git is enabled and initialized."""
+        if not self.site_config.get("git_enabled", True):
+            return None
+        if not self.site_config.get("git_auto_commit", True):
+            return None
+        if update_res.get("status") != "completed":
+            return None
+
+        try:
+            if not self.git_manager.is_initialized():
+                return None
+
+            commit_info = self.git_manager.create_update_commit(
+                update_res,
+                versions_before=versions_before,
+                versions_after=versions_after
+            )
+            git_data = {
+                "commit": commit_info.get("commit"),
+                "commit_message": commit_info.get("message"),
+                "commit_success": commit_info.get("success", False)
+            }
+
+            if self.site_config.get("git_auto_push", True) and commit_info.get("success"):
+                push_info = self.git_manager.push_to_github()
+                git_data["push_success"] = push_info.get("success", False)
+                if not push_info.get("success"):
+                    git_data["push_error"] = push_info.get("error")
+
+            return git_data
+        except Exception as e:
+            return {"commit_success": False, "error": str(e)}
 
     def _write_history(self, record: Dict[str, Any]) -> None:
         """Append an update record to the site's update history JSONL file."""
@@ -111,22 +188,23 @@ class UpdateManager:
         """Automate post-update tasks (database updates and cache flushing)."""
         time.sleep(1.0)
         try:
-            self.wp_cli.run_command(["core", "update-db"])
-        except Exception:
-            pass
-        try:
-            self.wp_cli.run_command(["cache", "flush"])
+            self.cache_manager.clear_all_caches()
         except Exception:
             pass
 
     def update_core(self, major: bool = False, timestamp: Optional[str] = None, create_backup: bool = True, quality_checks: bool = True, bypass_checks: Optional[bool] = None) -> Dict[str, Any]:
         """Perform core update and record history."""
+        versions_before = self.capture_versions()
         try:
             res = self.core_updater.update(major, timestamp=timestamp, create_backup=create_backup, quality_checks=quality_checks, bypass_checks=bypass_checks)
-            self._write_history(res)
             if res.get("status") == "completed":
                 self.update_cache_after_success("core")
-                self._post_update_tasks()
+                versions_after = self.capture_versions()
+                res["versions"] = {"before": versions_before, "after": versions_after}
+                git_info = self._handle_git_integration(res, versions_before, versions_after)
+                if git_info:
+                    res["git"] = git_info
+            self._write_history(res)
             return res
         except Exception as e:
             fallback_res = {
@@ -150,12 +228,17 @@ class UpdateManager:
 
     def update_plugins(self, plugin: Optional[str] = None, timestamp: Optional[str] = None, create_backup: bool = True, quality_checks: bool = True, bypass_checks: Optional[bool] = None) -> Dict[str, Any]:
         """Perform plugins update and record history."""
+        versions_before = self.capture_versions()
         try:
             res = self.plugin_updater.update(plugin, timestamp=timestamp, create_backup=create_backup, quality_checks=quality_checks, bypass_checks=bypass_checks)
-            self._write_history(res)
             if res.get("status") == "completed":
                 self.update_cache_after_success("plugin")
-                self._post_update_tasks()
+                versions_after = self.capture_versions()
+                res["versions"] = {"before": versions_before, "after": versions_after}
+                git_info = self._handle_git_integration(res, versions_before, versions_after)
+                if git_info:
+                    res["git"] = git_info
+            self._write_history(res)
             return res
         except Exception as e:
             fallback_res = {
@@ -179,12 +262,17 @@ class UpdateManager:
 
     def update_themes(self, theme: Optional[str] = None, timestamp: Optional[str] = None, create_backup: bool = True, quality_checks: bool = True, bypass_checks: Optional[bool] = None) -> Dict[str, Any]:
         """Perform themes update and record history."""
+        versions_before = self.capture_versions()
         try:
             res = self.theme_updater.update(theme, timestamp=timestamp, create_backup=create_backup, quality_checks=quality_checks, bypass_checks=bypass_checks)
-            self._write_history(res)
             if res.get("status") == "completed":
                 self.update_cache_after_success("theme")
-                self._post_update_tasks()
+                versions_after = self.capture_versions()
+                res["versions"] = {"before": versions_before, "after": versions_after}
+                git_info = self._handle_git_integration(res, versions_before, versions_after)
+                if git_info:
+                    res["git"] = git_info
+            self._write_history(res)
             return res
         except Exception as e:
             fallback_res = {
@@ -209,35 +297,37 @@ class UpdateManager:
     def update_all(self, create_backup: bool = True, quality_checks: bool = True, bypass_checks: Optional[bool] = None) -> Dict[str, Any]:
         """
         Sequentially perform core, plugin, and theme updates.
-        Updates plugins and themes first, then WordPress core.
-        Stops and rolls back immediately if any updates fail.
+        Updates plugins, themes, and WordPress core unconditionally so that
+        a failure in earlier steps does not skip remaining updates.
+        Overall status reflects the worst status across all steps.
         """
         results = []
-        overall_status = "completed"
         shared_timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        versions_before = self.capture_versions()
         
         try:
             # 1. Update Plugins
             plugin_res = self.update_plugins(plugin=None, timestamp=shared_timestamp, create_backup=create_backup, quality_checks=quality_checks, bypass_checks=bypass_checks)
             results.append(plugin_res)
-            if plugin_res["status"] in ["rolled_back", "failed"]:
-                overall_status = plugin_res["status"]
                 
-            # 2. Update Themes if plugins succeeded
-            if overall_status == "completed":
-                theme_res = self.update_themes(theme=None, timestamp=shared_timestamp, create_backup=create_backup, quality_checks=quality_checks, bypass_checks=bypass_checks)
-                results.append(theme_res)
-                if theme_res["status"] in ["rolled_back", "failed"]:
-                    overall_status = theme_res["status"]
+            # 2. Update Themes
+            theme_res = self.update_themes(theme=None, timestamp=shared_timestamp, create_backup=create_backup, quality_checks=quality_checks, bypass_checks=bypass_checks)
+            results.append(theme_res)
                     
-            # 3. Update Core if plugins and themes succeeded
-            if overall_status == "completed":
-                core_res = self.update_core(major=False, timestamp=shared_timestamp, create_backup=create_backup, quality_checks=quality_checks, bypass_checks=bypass_checks)
-                results.append(core_res)
-                if core_res["status"] in ["rolled_back", "failed"]:
-                    overall_status = core_res["status"]
+            # 3. Update Core
+            core_res = self.update_core(major=False, timestamp=shared_timestamp, create_backup=create_backup, quality_checks=quality_checks, bypass_checks=bypass_checks)
+            results.append(core_res)
                     
-            # Cache clearing is automatically performed by sub-updaters called above
+            # Determine overall status: failed > rolled_back > completed
+            statuses = [r.get("status") for r in results]
+            if "failed" in statuses:
+                overall_status = "failed"
+            elif "rolled_back" in statuses:
+                overall_status = "rolled_back"
+            else:
+                overall_status = "completed"
+
+            versions_after = self.capture_versions()
             res = {
                 "update_id": f"all_update_{time.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:4]}",
                 "site_name": self.site_name,
@@ -250,8 +340,15 @@ class UpdateManager:
                 "status": overall_status,
                 "rollback_triggered": any(r.get("rollback_triggered", False) for r in results),
                 "error": next((r.get("error") for r in results if r.get("error")), None),
-                "steps": results
+                "steps": results,
+                "versions": {"before": versions_before, "after": versions_after}
             }
+
+            if overall_status == "completed":
+                git_info = self._handle_git_integration(res, versions_before, versions_after)
+                if git_info:
+                    res["git"] = git_info
+
             self._write_history(res)
             return res
         except Exception as e:

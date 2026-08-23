@@ -52,6 +52,41 @@ class TestBackupComponents(unittest.TestCase):
         self.assertIn("-h dbhost", cmd)
         self.assertIn("dbname", cmd)
 
+    @patch("src.backup.database.os.name", "nt")
+    def test_database_dump_windows(self):
+        from src.execution.local import LocalExecutor
+        local_executor = LocalExecutor()
+
+        def fake_execute_stream(command, local_path):
+            with open(local_path, "wb") as f:
+                f.write(b"mocked_dump_data")
+            return CommandResult(exit_code=0, stdout="", stderr="", success=True)
+
+        local_executor.execute_stream = MagicMock(side_effect=fake_execute_stream)
+
+        db_backup = DatabaseBackup(local_executor, self.db_config, self.temp_dir)
+        db_file = db_backup.dump()
+
+        self.assertTrue(os.path.exists(db_file))
+        args, kwargs = local_executor.execute_stream.call_args
+        cmd = args[0]
+        self.assertIn("mysqldump", cmd)
+        self.assertIn('MYSQL_PWD=dbpass', cmd)
+        self.assertIn('-h "dbhost"', cmd)
+
+    @patch("src.backup.database.os.name", "nt")
+    def test_database_dump_windows_rejects_unsafe_password(self):
+        from src.execution.local import LocalExecutor
+        local_executor = LocalExecutor()
+        local_executor.execute_stream = MagicMock()
+
+        unsafe_db_config = dict(self.db_config, password='abc" & calc.exe & "')
+        db_backup = DatabaseBackup(local_executor, unsafe_db_config, self.temp_dir)
+
+        with self.assertRaises(ValueError):
+            db_backup.dump()
+        local_executor.execute_stream.assert_not_called()
+
     def test_database_restore(self):
         db_backup = DatabaseBackup(self.mock_executor, self.db_config, self.temp_dir)
         

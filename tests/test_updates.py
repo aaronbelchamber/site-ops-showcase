@@ -56,7 +56,7 @@ class TestUpdates(unittest.TestCase):
         self.health_mgr_patcher.stop()
         shutil.rmtree(self.temp_dir)
 
-    def _get_health_report(self, overall_status="healthy", status_code=200, db_connection="success", console_errors_matched=True, screenshot_diffs_matched=True):
+    def _get_health_report(self, overall_status="healthy", status_code=200, db_connection="success", console_errors_matched=True, screenshot_diffs_matched=True, asset_issues_matched=True):
         return {
             "id": "test_report_id",
             "overall_status": overall_status,
@@ -66,7 +66,8 @@ class TestUpdates(unittest.TestCase):
                     "console_errors_matched": console_errors_matched,
                     "screenshot_diffs": {
                         "matched": screenshot_diffs_matched
-                    }
+                    },
+                    "asset_issues_matched": asset_issues_matched
                 },
                 "database": {
                     "connection": db_connection
@@ -126,24 +127,48 @@ class TestUpdates(unittest.TestCase):
         self.assertTrue(result["rollback_triggered"])
         self.mock_backup_mgr.restore_backup.assert_called_once_with("test_backup_123")
 
-    def test_update_all_stops_on_failure(self):
+    def test_core_update_rolled_back_on_new_broken_image(self):
+        # Pre-update check passes; post-update finds a broken image that wasn't there before
+        self.mock_health_mgr.run_all_checks.side_effect = [
+            self._get_health_report(overall_status="healthy"),
+            self._get_health_report(overall_status="degraded", asset_issues_matched=False)
+        ]
+
+        self.mock_backup_mgr.create_backup.return_value = {"backup_id": "test_backup_123"}
+        self.mock_wp_cli.run_command.return_value = CommandResult(
+            exit_code=0, stdout="WordPress updated successfully.", stderr="", success=True
+        )
+        self.mock_backup_mgr.restore_backup.return_value = True
+
+        result = self.manager.update_core(major=False)
+
+        self.assertEqual(result["status"], "rolled_back")
+        self.assertTrue(result["rollback_triggered"])
+        self.mock_backup_mgr.restore_backup.assert_called_once_with("test_backup_123")
+
+    def test_update_all_continues_after_failure(self):
         # Setup pre-update check and backup
         self.mock_health_mgr.run_all_checks.return_value = self._get_health_report(overall_status="healthy")
         self.mock_backup_mgr.create_backup.return_value = {"backup_id": "test_backup_123"}
         
-        # Mock core update command to fail
-        self.mock_wp_cli.run_command.return_value = CommandResult(
-            exit_code=1, stdout="", stderr="Connection failed.", success=False
-        )
+        # Mock plugin WP-CLI update command to fail on plugins, but allow subsequent commands to succeed or fail
+        def mock_run_command(cmd, **kwargs):
+            if cmd and cmd[0] == "plugin":
+                return CommandResult(exit_code=1, stdout="", stderr="Connection failed.", success=False)
+            return CommandResult(exit_code=0, stdout="Success.", stderr="", success=True)
+            
+        self.mock_wp_cli.run_command.side_effect = mock_run_command
         self.mock_backup_mgr.restore_backup.return_value = True
         
         # Run update_all
         res = self.manager.update_all()
         
         self.assertEqual(res["status"], "rolled_back")
-        # Ensure only 1 step was recorded (plugin), themes/core not executed
-        self.assertEqual(len(res["steps"]), 1)
+        # Ensure all 3 steps were recorded (plugin, theme, core) even after plugin failure
+        self.assertEqual(len(res["steps"]), 3)
         self.assertEqual(res["steps"][0]["type"], "plugin")
+        self.assertEqual(res["steps"][1]["type"], "theme")
+        self.assertEqual(res["steps"][2]["type"], "core")
 
     def test_plugin_check_updates(self):
         self.mock_wp_cli.check_plugin_updates.return_value = [{"name": "akismet", "version": "5.0", "update_version": "5.1"}]
@@ -183,7 +208,7 @@ class TestUpdates(unittest.TestCase):
         self.assertEqual(result["status"], "rolled_back")
         self.assertTrue(result["rollback_triggered"])
         self.mock_backup_mgr.restore_backup.assert_called_once_with("plugin_backup_123")
-        self.mock_wp_cli.run_command.assert_called_once_with(["plugin", "update", "--all"])
+        self.mock_wp_cli.run_command.assert_any_call(["plugin", "update", "--all"])
 
     def test_theme_check_updates(self):
         self.mock_wp_cli.check_theme_updates.return_value = [{"name": "twentytwenty", "version": "2.0", "update_version": "2.1"}]
@@ -223,7 +248,7 @@ class TestUpdates(unittest.TestCase):
         self.assertEqual(result["status"], "rolled_back")
         self.assertTrue(result["rollback_triggered"])
         self.mock_backup_mgr.restore_backup.assert_called_once_with("theme_backup_123")
-        self.mock_wp_cli.run_command.assert_called_once_with(["theme", "update", "--all"])
+        self.mock_wp_cli.run_command.assert_any_call(["theme", "update", "--all"])
 
     def test_updater_rollback_methods(self):
         self.mock_backup_mgr.restore_backup.return_value = True
@@ -266,6 +291,182 @@ class TestUpdates(unittest.TestCase):
         # Test clear cache
         self.manager.clear_cached_updates()
         self.assertFalse(os.path.exists(cache_path))
+
+    def test_cache_manager_flushes_elementor_and_caching_plugins(self):
+        from src.wp.cache import CacheManager
+        
+        cache_mgr = CacheManager(self.site_config, self.mock_wp_cli)
+        self.mock_wp_cli.list_plugins.return_value = [
+            {"name": "elementor", "status": "active"},
+            {"name": "wp-rocket", "status": "active"},
+            {"name": "akismet", "status": "inactive"}
+        ]
+        self.mock_wp_cli.run_command.return_value = CommandResult(
+            exit_code=0, stdout="Success.", stderr="", success=True
+        )
+        
+        res = cache_mgr.clear_all_caches()
+        self.assertTrue(res["success"])
+        self.assertFalse(res["has_warnings"])
+        self.assertIsNone(res["admin_url"])
+        
+        # Check that update-db, elementor flush-css, wp-rocket clean, and cache flush were invoked
+        self.mock_wp_cli.run_command.assert_any_call(["core", "update-db"])
+        self.mock_wp_cli.run_command.assert_any_call(["elementor", "flush-css"])
+        self.mock_wp_cli.run_command.assert_any_call(["rocket", "clean", "--confirm"])
+        self.mock_wp_cli.run_command.assert_any_call(["cache", "flush"])
+
+    def test_cache_manager_triggers_admin_init_as_administrator(self):
+        from src.wp.cache import CacheManager
+
+        cache_mgr = CacheManager(self.site_config, self.mock_wp_cli)
+        self.mock_wp_cli.list_plugins.return_value = []
+
+        def mock_cmd(cmd, **kwargs):
+            if cmd == ["user", "list", "--role=administrator", "--field=ID", "--number=1"]:
+                return CommandResult(exit_code=0, stdout="7\n", stderr="", success=True)
+            if cmd == ["eval", "wp_set_current_user(7); do_action('admin_init');"]:
+                return CommandResult(exit_code=0, stdout="", stderr="", success=True)
+            return CommandResult(exit_code=0, stdout="Success.", stderr="", success=True)
+
+        self.mock_wp_cli.run_command.side_effect = mock_cmd
+        res = cache_mgr.clear_all_caches()
+
+        self.assertTrue(res["admin_init_migrations"]["success"])
+        self.mock_wp_cli.run_command.assert_any_call(["user", "list", "--role=administrator", "--field=ID", "--number=1"])
+        self.mock_wp_cli.run_command.assert_any_call(["eval", "wp_set_current_user(7); do_action('admin_init');"])
+
+    def test_cache_manager_admin_init_failure_does_not_count_as_warning(self):
+        from src.wp.cache import CacheManager
+
+        cache_mgr = CacheManager(self.site_config, self.mock_wp_cli)
+        self.mock_wp_cli.list_plugins.return_value = []
+
+        def mock_cmd(cmd, **kwargs):
+            if cmd == ["user", "list", "--role=administrator", "--field=ID", "--number=1"]:
+                # No administrator found on this site
+                return CommandResult(exit_code=0, stdout="", stderr="", success=True)
+            return CommandResult(exit_code=0, stdout="Success.", stderr="", success=True)
+
+        self.mock_wp_cli.run_command.side_effect = mock_cmd
+        res = cache_mgr.clear_all_caches()
+
+        # A missing admin_init trigger is expected/benign, not a cache-flush warning
+        self.assertFalse(res["admin_init_migrations"]["success"])
+        self.assertTrue(res["success"])
+        self.assertFalse(res["has_warnings"])
+
+    def test_cache_manager_warning_generates_admin_url(self):
+        from src.wp.cache import CacheManager
+        
+        cache_mgr = CacheManager(self.site_config, self.mock_wp_cli)
+        self.mock_wp_cli.list_plugins.return_value = [
+            {"name": "elementor", "status": "active"}
+        ]
+        def mock_cmd(cmd, **kwargs):
+            if cmd == ["elementor", "flush-css"]:
+                return CommandResult(exit_code=1, stdout="", stderr="Error: elementor command not found", success=False)
+            return CommandResult(exit_code=0, stdout="Success", stderr="", success=True)
+            
+        self.mock_wp_cli.run_command.side_effect = mock_cmd
+        res = cache_mgr.clear_all_caches()
+        
+        self.assertFalse(res["success"])
+        self.assertTrue(res["has_warnings"])
+        self.assertEqual(len(res["warnings"]), 1)
+        self.assertEqual(res["admin_url"], "http://example.com/wp-admin")
+
+    def test_core_update_flushes_cache_before_health_check(self):
+        call_order = []
+        
+        def mock_run_all_checks(**kwargs):
+            call_order.append("health_check")
+            return self._get_health_report(overall_status="healthy")
+            
+        def mock_run_command(cmd, **kwargs):
+            if cmd == ["core", "update", "--minor"]:
+                call_order.append("core_update")
+            elif cmd == ["cache", "flush"]:
+                call_order.append("cache_flush")
+            return CommandResult(exit_code=0, stdout="Success.", stderr="", success=True)
+            
+        self.mock_health_mgr.run_all_checks.side_effect = mock_run_all_checks
+        self.mock_wp_cli.run_command.side_effect = mock_run_command
+        self.mock_backup_mgr.create_backup.return_value = {"backup_id": "test_backup"}
+        
+        res = self.manager.update_core(major=False)
+        self.assertEqual(res["status"], "completed")
+        self.assertIn("cache_flush", res)
+        
+        # Verify order: pre health_check -> core_update -> cache_flush -> post health_check
+        self.assertEqual(call_order, ["health_check", "core_update", "cache_flush", "health_check"])
+
+    def test_plugin_update_flushes_cache_before_health_check(self):
+        call_order = []
+
+        def mock_run_all_checks(**kwargs):
+            call_order.append("health_check")
+            return self._get_health_report(overall_status="healthy")
+
+        def mock_run_command(cmd, **kwargs):
+            if cmd == ["plugin", "update", "--all"]:
+                call_order.append("plugin_update")
+            elif cmd == ["cache", "flush"]:
+                call_order.append("cache_flush")
+            return CommandResult(exit_code=0, stdout="Success.", stderr="", success=True)
+
+        self.mock_health_mgr.run_all_checks.side_effect = mock_run_all_checks
+        self.mock_wp_cli.run_command.side_effect = mock_run_command
+        self.mock_backup_mgr.create_backup.return_value = {"backup_id": "test_backup"}
+
+        res = self.manager.update_plugins(plugin=None)
+        self.assertEqual(res["status"], "completed")
+        self.assertIn("cache_flush", res)
+
+        # Verify order: pre health_check -> plugin_update -> cache_flush -> post health_check
+        self.assertEqual(call_order, ["health_check", "plugin_update", "cache_flush", "health_check"])
+
+    def test_theme_update_flushes_cache_before_health_check(self):
+        call_order = []
+
+        def mock_run_all_checks(**kwargs):
+            call_order.append("health_check")
+            return self._get_health_report(overall_status="healthy")
+
+        def mock_run_command(cmd, **kwargs):
+            if cmd == ["theme", "update", "--all"]:
+                call_order.append("theme_update")
+            elif cmd == ["cache", "flush"]:
+                call_order.append("cache_flush")
+            return CommandResult(exit_code=0, stdout="Success.", stderr="", success=True)
+
+        self.mock_health_mgr.run_all_checks.side_effect = mock_run_all_checks
+        self.mock_wp_cli.run_command.side_effect = mock_run_command
+        self.mock_backup_mgr.create_backup.return_value = {"backup_id": "test_backup"}
+
+        res = self.manager.update_themes(theme=None)
+        self.assertEqual(res["status"], "completed")
+        self.assertIn("cache_flush", res)
+
+        # Verify order: pre health_check -> theme_update -> cache_flush -> post health_check
+        self.assertEqual(call_order, ["health_check", "theme_update", "cache_flush", "health_check"])
+
+    def test_is_stale_logic(self):
+        import time
+        from src.api.routes.updates import UpdatesController
+
+        # Empty or None timestamp is stale
+        self.assertTrue(UpdatesController._is_stale(None))
+        self.assertTrue(UpdatesController._is_stale(""))
+
+        # Fresh timestamp (current time) is not stale
+        now_ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        self.assertFalse(UpdatesController._is_stale(now_ts))
+
+        # Stale timestamp (2 days ago) is stale
+        old_time = time.gmtime(time.time() - (2 * 24 * 3600))
+        old_ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", old_time)
+        self.assertTrue(UpdatesController._is_stale(old_ts))
 
 if __name__ == "__main__":
     unittest.main()

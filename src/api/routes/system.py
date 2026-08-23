@@ -52,18 +52,17 @@ class SystemController:
         import re
         from src.logging.cleanup import CleanupManager
         
-        # 1. Automatic log pruning (over 14 days or LOG_RETENTION_DAYS)
+        # 1. Automatic log pruning (over 30 days or LOG_RETENTION_DAYS)
         try:
-            log_retention = int(os.getenv("LOG_RETENTION_DAYS", "14"))
+            log_retention = int(os.getenv("LOG_RETENTION_DAYS", "30"))
         except Exception:
-            log_retention = 14
+            log_retention = 30
             
         cleanup_mgr = CleanupManager()
         cleanup_mgr.prune_app_log(log_retention)
         
-        src_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        project_root = os.path.dirname(src_dir)
-        log_path = os.path.join(project_root, "logs", "app.log")
+        from src.logging.logger import current_month_dir
+        log_path = os.path.join(current_month_dir(), "app.log")
         
         limit = int(request.args.get("limit", 100))
         filter_level = request.args.get("level", "").strip().upper()

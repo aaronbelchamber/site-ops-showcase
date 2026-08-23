@@ -591,56 +591,27 @@ class RunServerCommand(BaseCommand):
     
     def execute(self, args: Any) -> int:
         import os
-        import time
-        
+
         dotenv.load_dotenv(ENV_PATH)
-        
-        # Set environment variables for the headroom proxy sticky configuration
-        os.environ["GEMINI_API_URL"] = "http://127.0.0.1:8787"
-        os.environ["GEMINI_BASE_URL"] = "http://127.0.0.1:8787"
-        
+
         # Under Flask's Werkzeug reloader (when debug=True), the execution runs twice:
         # first in the parent process, then in the child process.
-        # We only clean up processes and start the proxy in the parent process (or if reloader is disabled)
-        # to prevent terminating the proxy/reloader on every auto-reload cycle.
+        # We only clean up the port in the parent process (or if reloader is disabled)
+        # to avoid interfering with the reloader's own child process on auto-reload.
         is_reloader_child = os.environ.get("WERKZEUG_RUN_MAIN") == "true"
-        proxy_process = None
-        executor = get_executor()
-        
+
         if not is_reloader_child:
-            # Clean up any existing processes on ports args.port and 8787
             _kill_process_on_port(args.port)
-            _kill_process_on_port(8787)
-            
-            # Start headroom proxy as a background process via executor abstraction
-            try:
-                print("Starting Headroom Proxy on port 8787...")
-                if hasattr(executor, "start_background_process"):
-                    proxy_process = executor.start_background_process(["headroom", "proxy", "--port", "8787"])
-                # Give the proxy a brief moment to start up
-                time.sleep(0.5)
-            except Exception as e:
-                print(f"Warning: Failed to start headroom proxy: {e}")
-                
-        from src.api.app import create_app
+
+        from src.api.app import create_app, start_cleanup_scheduler
         debug_mode = not args.no_debug
         print(f"Starting server on {args.host}:{args.port} (debug={debug_mode})...")
-        
-        try:
-            app = create_app()
-            app.run(host=args.host, port=args.port, debug=debug_mode)
-        finally:
-            if not is_reloader_child:
-                if proxy_process:
-                    print("Stopping Headroom Proxy...")
-                    try:
-                        proxy_process.terminate()
-                        proxy_process.wait(timeout=2)
-                    except Exception:
-                        pass
-                # Make absolutely sure it's dead
-                _kill_process_on_port(8787)
-                
+
+        start_cleanup_scheduler(debug=debug_mode)
+
+        app = create_app()
+        app.run(host=args.host, port=args.port, debug=debug_mode)
+
         return 0
 
 
@@ -659,9 +630,9 @@ class CleanupCommand(BaseCommand):
             except Exception:
                 days = 30
             try:
-                log_days = int(os.getenv("LOG_RETENTION_DAYS", "14"))
+                log_days = int(os.getenv("LOG_RETENTION_DAYS", "30"))
             except Exception:
-                log_days = 14
+                log_days = 30
         else:
             log_days = days
             
@@ -733,4 +704,114 @@ class SetupGDriveCommand(BaseCommand):
         except Exception as err:
             print(f"  [ERROR] Backup creation or copy failed: {err}")
             return 1
+
+
+class GitInitCommand(BaseCommand):
+    """Initialize Git repository and GitHub remote for a site or all sites."""
+    
+    def execute(self, args) -> int:
+        from src.git.manager import GitManager
+        sites = load_sites_config()
+        credentials = load_credentials()
+        
+        target_sites = []
+        if getattr(args, "all", False):
+            target_sites = list(sites.keys())
+        elif getattr(args, "site", None):
+            if args.site not in sites:
+                print(f"[ERROR] Site '{args.site}' not found in configuration.")
+                return 1
+            target_sites = [args.site]
+        else:
+            print("[ERROR] Must specify either --site <name> or --all.")
+            return 1
+
+        force = getattr(args, "force", False)
+        success_count = 0
+
+        for site_name in target_sites:
+            site_config = {**sites[site_name], "site_name": site_name}
+            print(f"\n--- Initializing Git for site: {site_name} ---")
+            if site_config.get("status") != "Ready":
+                print(f"  [SKIP] Site status is '{site_config.get('status')}', must be 'Ready'.")
+                continue
+
+            executor = get_executor(site_config, credentials)
+            try:
+                git_mgr = GitManager(site_config, executor)
+                result = git_mgr.init_repo(force=force)
+                if result.get("success"):
+                    print(f"  [SUCCESS] {result.get('message')}")
+                    if result.get("remote_setup", {}).get("remote_url"):
+                        print(f"  [REMOTE] Remote configured: {result['remote_setup']['remote_url']}")
+                    success_count += 1
+                else:
+                    print(f"  [ERROR] {result.get('error')}")
+            finally:
+                executor.disconnect()
+
+        print(f"\nCompleted: {success_count}/{len(target_sites)} site repositories initialized.")
+        return 0 if success_count == len(target_sites) else 1
+
+
+class GitStatusCommand(BaseCommand):
+    """Inspect Git repository status and remote details for a site."""
+    
+    def execute(self, args) -> int:
+        from src.git.manager import GitManager
+        sites = load_sites_config()
+        credentials = load_credentials()
+
+        if not getattr(args, "site", None) or args.site not in sites:
+            print(f"[ERROR] Must specify a valid site via --site <name>.")
+            return 1
+
+        site_name = args.site
+        site_config = {**sites[site_name], "site_name": site_name}
+        executor = get_executor(site_config, credentials)
+        try:
+            git_mgr = GitManager(site_config, executor)
+            status = git_mgr.get_repo_status()
+            print(f"\n=== Git Status for {site_name} ===")
+            print(f"  Initialized: {status.get('initialized')}")
+            if status.get("initialized"):
+                print(f"  Branch:      {status.get('branch')}")
+                print(f"  Remote:      {status.get('remote_url') or 'None'}")
+                print(f"  Dirty:       {status.get('has_uncommitted_changes')}")
+                last_commit = status.get("last_commit")
+                if last_commit:
+                    print(f"  Last Commit: [{last_commit.get('short_hash')}] {last_commit.get('message')} ({last_commit.get('author')}, {last_commit.get('date')})")
+            return 0
+        finally:
+            executor.disconnect()
+
+
+class GitPushCommand(BaseCommand):
+    """Manually push Git commits to origin remote for a site."""
+    
+    def execute(self, args) -> int:
+        from src.git.manager import GitManager
+        sites = load_sites_config()
+        credentials = load_credentials()
+
+        if not getattr(args, "site", None) or args.site not in sites:
+            print(f"[ERROR] Must specify a valid site via --site <name>.")
+            return 1
+
+        site_name = args.site
+        site_config = {**sites[site_name], "site_name": site_name}
+        executor = get_executor(site_config, credentials)
+        try:
+            git_mgr = GitManager(site_config, executor)
+            print(f"Pushing Git repository for '{site_name}' to remote...")
+            result = git_mgr.push_to_github()
+            if result.get("success"):
+                print("  [SUCCESS] Pushed successfully to origin.")
+                return 0
+            else:
+                print(f"  [ERROR] {result.get('error')}")
+                return 1
+        finally:
+            executor.disconnect()
+
 

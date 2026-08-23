@@ -2,6 +2,7 @@ import os
 import json
 import uuid
 import time
+import re
 from typing import Dict, Any, List, Optional
 
 from src.backup.database import DatabaseBackup
@@ -41,6 +42,16 @@ class BackupManager:
             self.assets_dir,
             self.site_config.get("include_media", False)
         )
+
+    @staticmethod
+    def _validate_backup_id(backup_id: str) -> None:
+        """Validate backup_id to prevent path traversal attacks."""
+        if not backup_id or not isinstance(backup_id, str):
+            raise ValueError("invalid backup_id")
+        if "/" in backup_id or "\\" in backup_id or ".." in backup_id:
+            raise ValueError("invalid backup_id")
+        if not re.match(r"^[A-Za-z0-9_\-\.]+$", backup_id):
+            raise ValueError("invalid backup_id")
 
     def create_backup(self, description: Optional[str] = None, include_media: Optional[bool] = None, suffix: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -144,6 +155,7 @@ class BackupManager:
 
     def restore_backup(self, backup_id: str) -> bool:
         """Restore both database and assets from specified backup manifest ID."""
+        BackupManager._validate_backup_id(backup_id)
         manifest_path = os.path.join(self.manifests_dir, f"{backup_id}.json")
         if not os.path.exists(manifest_path):
             raise FileNotFoundError(f"Backup manifest not found: {backup_id}")
@@ -205,6 +217,7 @@ class BackupManager:
 
     def delete_backup(self, backup_id: str) -> bool:
         """Delete files and manifest of specified backup ID."""
+        BackupManager._validate_backup_id(backup_id)
         manifest_path = os.path.join(self.manifests_dir, f"{backup_id}.json")
         if not os.path.exists(manifest_path):
             return False
