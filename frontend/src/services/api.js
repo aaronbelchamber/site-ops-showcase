@@ -131,6 +131,10 @@ class APIClient {
         return this.request(`/api/sites/${siteName}/health`);
     }
 
+    triggerHealthCheckAsync(siteName) {
+        return this.request(`/api/sites/${siteName}/health?async=true`);
+    }
+
     getHealthHistory(siteName) {
         return this.request(`/api/sites/${siteName}/health/history`);
     }
@@ -209,6 +213,10 @@ class APIClient {
     // System methods
     getSystemStatus() {
         return this.request("/api/system/status");
+    }
+
+    getSystemMode() {
+        return this.request("/api/system/mode");
     }
 
     getTaskStatus(taskId) {

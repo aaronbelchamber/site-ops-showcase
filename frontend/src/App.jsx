@@ -10,6 +10,7 @@ import SiteGrid from "./components/SiteGrid";
 import SiteDetails from "./components/SiteDetails";
 import AddSiteForm from "./components/AddSiteForm";
 import HealthCheckDetails from "./components/HealthCheckDetails";
+import ProductionHealthDashboard from "./components/ProductionHealthDashboard";
 import ManageSitesView from "./components/ManageSitesView";
 import AdminProfilesTab from "./components/admin/AdminProfilesTab";
 import AdminBackupsTab from "./components/admin/AdminBackupsTab";
@@ -21,6 +22,7 @@ export default function App() {
     const { pollTaskWithDelay } = useTaskPolling();
     const staleCheckTimeoutsRef = useRef([]);
     const [isAuthenticated, setIsAuthenticated] = useState(api.hasToken());
+    const [appMode, setAppMode] = useState("full");
     const [sites, setSites] = useState([]);
     const [loadingSites, setLoadingSites] = useState(false);
     const [staleOnlyFilter, setStaleOnlyFilter] = useState(false);
@@ -528,6 +530,11 @@ export default function App() {
             } else {
                 setCurrentView("dashboard");
             }
+        } else if (path === "/production-health") {
+            setSelectedSiteName(null);
+            setSelectedHealthCheckId(null);
+            setSiteToEdit(null);
+            setCurrentView("production-health");
         } else if (path === "/logs") {
             setSelectedSiteName(null);
             setSelectedHealthCheckId(null);
@@ -562,10 +569,28 @@ export default function App() {
         return () => window.removeEventListener("popstate", onPopState);
     }, []);
 
+    const loadAppMode = async () => {
+        try {
+            const data = await api.getSystemMode();
+            const mode = data?.mode || "full";
+            setAppMode(mode);
+            // Standalone health-dashboard processes land directly on Production
+            // Health instead of the full dashboard, since Admin/Manage Sites
+            // aren't meant to be used from this locked-down instance.
+            if (mode === "health-dashboard" && window.location.pathname === "/") {
+                window.history.replaceState({}, "", "/production-health");
+                window.dispatchEvent(new Event("popstate"));
+            }
+        } catch (error) {
+            console.debug("Failed to load app mode:", error);
+        }
+    };
+
     useEffect(() => {
         // Initial load
         if (isAuthenticated) {
             loadSites();
+            loadAppMode();
         }
 
         // Listen for 401 unauthorized events from API client
@@ -607,6 +632,7 @@ export default function App() {
     const handleAuthenticated = (token) => {
         setIsAuthenticated(true);
         loadSites();
+        loadAppMode();
     };
 
     const handleLogout = () => {
@@ -680,28 +706,43 @@ export default function App() {
                 </div>
                 {isAuthenticated && (
                     <div className="header-actions">
-                        <button 
+                        <button
                             type="button"
-                            className={`md-button ${currentView === "admin" ? "md-button-primary" : "md-button-outlined"}`}
+                            className={`md-button ${currentView === "production-health" ? "md-button-primary" : "md-button-outlined"}`}
                             onClick={() => {
-                                window.history.pushState({}, "", "/admin");
+                                window.history.pushState({}, "", "/production-health");
                                 window.dispatchEvent(new Event("popstate"));
                             }}
                         >
-                            <span className="material-symbols-outlined">settings</span> Admin
+                            <span className="material-symbols-outlined">monitor_heart</span> Production Health
                         </button>
 
-                        <button
-                            id="manageSitesBtn"
-                            type="button"
-                            className="md-button md-button-primary"
-                            onClick={() => {
-                                window.history.pushState({}, "", "/manage-sites");
-                                window.dispatchEvent(new Event("popstate"));
-                            }}
-                        >
-                            <span className="material-symbols-outlined">tune</span> Manage Sites
-                        </button>
+                        {appMode !== "health-dashboard" && (
+                            <>
+                                <button
+                                    type="button"
+                                    className={`md-button ${currentView === "admin" ? "md-button-primary" : "md-button-outlined"}`}
+                                    onClick={() => {
+                                        window.history.pushState({}, "", "/admin");
+                                        window.dispatchEvent(new Event("popstate"));
+                                    }}
+                                >
+                                    <span className="material-symbols-outlined">settings</span> Admin
+                                </button>
+
+                                <button
+                                    id="manageSitesBtn"
+                                    type="button"
+                                    className="md-button md-button-primary"
+                                    onClick={() => {
+                                        window.history.pushState({}, "", "/manage-sites");
+                                        window.dispatchEvent(new Event("popstate"));
+                                    }}
+                                >
+                                    <span className="material-symbols-outlined">tune</span> Manage Sites
+                                </button>
+                            </>
+                        )}
                         <button type="button" className="md-button md-button-tonal header-action-logout" onClick={handleLogout}>
                             <span className="material-symbols-outlined">logout</span>
                         </button>
@@ -712,6 +753,9 @@ export default function App() {
             <main className="app-container">
                 {isAuthenticated && (
                     <TopStatusContainer onActivityLogged={handleActivityLogged} />
+                )}
+                {isAuthenticated && currentView === "production-health" && (
+                    <ProductionHealthDashboard />
                 )}
                 {isAuthenticated && currentView === "manage-sites" && (
                     <ManageSitesView

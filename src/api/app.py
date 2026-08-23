@@ -60,6 +60,7 @@ class AppFactory:
         @app.route("/site/<path:sitename>/details")
         @app.route("/site/<path:sitename>/details/<path:subpath>")
         @app.route("/site/<path:sitename>/health-check/<path:check_id>")
+        @app.route("/production-health")
         @app.route("/logs")
         @app.route("/admin")
         @app.route("/profiles")

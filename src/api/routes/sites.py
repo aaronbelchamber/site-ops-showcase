@@ -58,6 +58,26 @@ class SitesController:
                         except Exception:
                             pass
 
+                # Attach cached health-check summary if available (console errors,
+                # last-checked timestamp/id, overall status) for the Production Health dashboard.
+                health_snapshot_file = os.path.join(PROJECT_ROOT, "logs", "health", f"last_snapshot_{name}.json")
+                if os.path.exists(health_snapshot_file):
+                    try:
+                        with open(health_snapshot_file, "r", encoding="utf-8") as hf:
+                            snapshot = json.load(hf)
+                        http_check = snapshot.get("checks", {}).get("http", {})
+                        console_errors = http_check.get("console_errors", [])
+                        active_errors = [e for e in console_errors if e.get("severity") != "ignored"]
+                        config["health_summary"] = {
+                            "id": snapshot.get("id"),
+                            "timestamp": snapshot.get("timestamp"),
+                            "overall_status": snapshot.get("overall_status"),
+                            "error_summary": http_check.get("error_summary", {}),
+                            "latest_console_errors": active_errors[:3],
+                        }
+                    except Exception:
+                        pass
+
             return jsonify({
                 "success": True,
                 "data": list(sites.values()),

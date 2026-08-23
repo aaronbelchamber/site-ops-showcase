@@ -14,6 +14,13 @@ export const getHoursSinceLastCheck = (site) => {
 
 export const isSiteStale = (site) => getHoursSinceLastCheck(site) > STALE_THRESHOLD_HOURS;
 
+// Strips scheme/www for a compact display label while callers keep the
+// full URL as the link href (mirrors SiteConfigManager.get_site_domain()).
+export const getDisplayDomain = (url) => {
+    if (!url) return "";
+    return url.replace(/^https?:\/\//i, "").replace(/^www\./i, "").replace(/\/$/, "");
+};
+
 export const arePathsEqual = (pathA, pathB, homeDir) => {
     if (!pathA || !pathB) return false;
 

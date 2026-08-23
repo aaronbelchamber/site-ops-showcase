@@ -47,6 +47,39 @@ export const getStatusDotClass = (updateInfo) => {
     return "status-circle-orange";
 };
 
+// Health-check staleness (Production Health dashboard): a separate, shorter
+// scale from the update-check staleness above, since a stale health check
+// means "we haven't looked at the live site/console errors recently" rather
+// than "we haven't checked for WP updates recently".
+export const getDaysSinceHealthCheck = (healthSummary) => {
+    if (!healthSummary || !healthSummary.timestamp) return Infinity;
+    const checkDate = new Date(healthSummary.timestamp);
+    if (isNaN(checkDate.getTime())) return Infinity;
+    const diffMs = Date.now() - checkDate.getTime();
+    return Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
+};
+
+export const getHealthCheckedLabel = (healthSummary) => {
+    if (!healthSummary || !healthSummary.timestamp) return "Never checked";
+    const checkDate = new Date(healthSummary.timestamp);
+    if (isNaN(checkDate.getTime())) return "Never checked";
+    const diffHours = (Date.now() - checkDate.getTime()) / (1000 * 60 * 60);
+    if (diffHours < 1) return "Checked <1h ago";
+    if (diffHours < 24) return `Checked ${Math.floor(diffHours)}h ago`;
+    return `Checked ${getDaysSinceHealthCheck(healthSummary)}d ago`;
+};
+
+// green <3d, yellow 3-7d, red >7d (or never checked)
+export const getHealthStatusDotClass = (healthSummary) => {
+    const daysSinceCheck = getDaysSinceHealthCheck(healthSummary);
+    if (daysSinceCheck === Infinity) return "status-circle-red";
+    if (daysSinceCheck < 3) return "status-circle-green";
+    if (daysSinceCheck <= 7) return "status-circle-yellow";
+    return "status-circle-red";
+};
+
+export const isHealthCheckStale = (healthSummary) => getDaysSinceHealthCheck(healthSummary) >= 3;
+
 // Health badge keeps UPPERCASE
 export const getHealthBadgeClass = (status) => {
     switch ((status || "").toLowerCase()) {

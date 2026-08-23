@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import api from "../services/api";
 import { showToast } from "../services/toast";
 import ImageLightbox from "./ImageLightbox";
+import { getDisplayDomain } from "../utils/siteHelpers";
 
 // --- Helper sub-components ---
 
@@ -464,6 +465,15 @@ export default function HealthCheckDetails({ siteName, healthCheckId, onBack }) 
     const [acceptingDiff, setAcceptingDiff] = useState(false);
     const [diffReason, setDiffReason] = useState("");
     const [lightboxImage, setLightboxImage] = useState(null);
+    const [site, setSite] = useState(null);
+
+    useEffect(() => {
+        let isMounted = true;
+        api.getSite(siteName)
+            .then((data) => { if (isMounted) setSite(data); })
+            .catch((e) => console.error("Failed to load site details", e));
+        return () => { isMounted = false; };
+    }, [siteName]);
 
     useEffect(() => {
         let isMounted = true;
@@ -607,6 +617,18 @@ export default function HealthCheckDetails({ siteName, healthCheckId, onBack }) 
                     </button>
                     <div>
                         <h2 style={{ margin: 0 }}>Health Check Report</h2>
+                        {site?.health_check_url && (
+                            <div>
+                                <a
+                                    href={site.health_check_url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    style={{ color: "var(--md-sys-color-primary)", fontWeight: 500 }}
+                                >
+                                    {getDisplayDomain(site.health_check_url)}
+                                </a>
+                            </div>
+                        )}
                         <span style={{ fontSize: "0.875rem", color: "var(--md-sys-color-outline)" }}>
                             ID: {healthCheckId} • Checked: {new Date(check.timestamp).toLocaleString()}
                         </span>

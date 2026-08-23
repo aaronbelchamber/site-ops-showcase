@@ -28,6 +28,17 @@ class SystemController:
 
     @staticmethod
     @require_api_key
+    def get_mode():
+        """Report whether this process is the full app or the standalone health dashboard."""
+        return jsonify({
+            "success": True,
+            "data": {"mode": os.environ.get("APP_MODE", "full")},
+            "error": None,
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        })
+
+    @staticmethod
+    @require_api_key
     def get_task_status(task_id):
         """Retrieve status, error, and result of a background task."""
         if task_id not in BACKGROUND_TASKS:
@@ -683,6 +694,7 @@ get_task_status = SystemController.get_task_status
 
 # Route mappings to SystemController
 system_bp.route("/status", methods=["GET"])(SystemController.get_system_status)
+system_bp.route("/mode", methods=["GET"])(SystemController.get_mode)
 system_bp.route("/tasks/<task_id>", methods=["GET"])(SystemController.get_task_status)
 system_bp.route("/logs", methods=["GET"])(SystemController.get_logs)
 system_bp.route("/ssh-keys", methods=["GET"])(SystemController.get_ssh_keys)

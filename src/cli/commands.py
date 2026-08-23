@@ -615,6 +615,32 @@ class RunServerCommand(BaseCommand):
         return 0
 
 
+class HealthDashboardCommand(BaseCommand):
+    """Start a standalone Production Health dashboard on its own port, independent of runserver."""
+
+    def execute(self, args: Any) -> int:
+        import os
+
+        dotenv.load_dotenv(ENV_PATH)
+
+        # Flags this process as the locked-down, read-mostly dashboard via /api/system/mode
+        # so the frontend hides Admin/Manage Sites and lands directly on Production Health.
+        os.environ["APP_MODE"] = "health-dashboard"
+
+        is_reloader_child = os.environ.get("WERKZEUG_RUN_MAIN") == "true"
+        if not is_reloader_child:
+            _kill_process_on_port(args.port)
+
+        from src.api.app import create_app, start_cleanup_scheduler
+        debug_mode = not args.no_debug
+        print(f"Starting Production Health dashboard on {args.host}:{args.port} (debug={debug_mode})...")
+
+        start_cleanup_scheduler(debug=debug_mode)
+
+        app = create_app()
+        app.run(host=args.host, port=args.port, debug=debug_mode)
+        return 0
+
 
 class CleanupCommand(BaseCommand):
     """Run system cleanup to prune old backups and log entries."""

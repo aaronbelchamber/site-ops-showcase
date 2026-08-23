@@ -8,10 +8,33 @@ from src.execution import get_executor
 from src.wp.cli import WPCLI
 from src.health.manager import HealthCheckManager
 from src.api.auth import require_api_key
+from src.api.tasks import start_task, operation_in_progress_response
 from src.logging.logger import logger
 
 health_bp = Blueprint("health", __name__)
 
+
+class HealthTaskRunner:
+    @staticmethod
+    def run_health_check_task(site_name: str):
+        sites = load_sites_config()
+        site_config = sites[site_name]
+
+        if site_config.get("status", "Ready") == "Ready":
+            credentials = load_credentials()
+            executor = get_executor(site_config, credentials)
+            try:
+                wp_cli = WPCLI(executor, site_config["wp_path"], site_config.get("wp_cli_path"))
+                mgr = HealthCheckManager(site_config, executor, wp_cli)
+                report = mgr.run_all_checks()
+            finally:
+                executor.disconnect()
+        else:
+            mgr = HealthCheckManager(site_config, executor=None, wp_cli=None)
+            report = mgr.run_all_checks()
+
+        logger.info(f"Health check executed for site '{site_name}'. Status: '{report.get('overall_status')}'.")
+        return report
 
 
 class HealthController:
@@ -22,37 +45,30 @@ class HealthController:
             sites = load_sites_config()
             if site_name not in sites:
                 return jsonify({"success": False, "data": None, "error": f"Site '{site_name}' not found.", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 404
-                
-            site_config = sites[site_name]
-            
-            # If the site status is 'Ready', initialize executor and WP-CLI
-            if site_config.get("status", "Ready") == "Ready":
-                credentials = load_credentials()
-                executor = get_executor(site_config, credentials)
-                try:
-                    wp_cli = WPCLI(executor, site_config["wp_path"], site_config.get("wp_cli_path"))
-                    mgr = HealthCheckManager(site_config, executor, wp_cli)
-                    report = mgr.run_all_checks()
-                    logger.info(f"Health check executed for site '{site_name}'. Status: '{report.get('overall_status')}'.")
-                    return jsonify({
-                        "success": True,
-                        "data": report,
-                        "error": None,
-                        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                    })
-                finally:
-                    executor.disconnect()
-            else:
-                # If site is not Ready, run only the browser health check without executor or WP-CLI
-                mgr = HealthCheckManager(site_config, executor=None, wp_cli=None)
-                report = mgr.run_all_checks()
-                logger.info(f"Health check executed for site '{site_name}' (status check only). Status: '{report.get('overall_status')}'.")
+
+            is_async = request.args.get("async", "false").lower() == "true"
+            if is_async:
+                task_id = start_task(
+                    f"Health check for {site_name}",
+                    HealthTaskRunner.run_health_check_task,
+                    site_name=site_name
+                )
+                if task_id is None:
+                    return operation_in_progress_response(site_name)
                 return jsonify({
                     "success": True,
-                    "data": report,
+                    "data": {"task_id": task_id, "status": "running"},
                     "error": None,
                     "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
                 })
+
+            report = HealthTaskRunner.run_health_check_task(site_name)
+            return jsonify({
+                "success": True,
+                "data": report,
+                "error": None,
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            })
         except Exception as e:
             return jsonify({
                 "success": False,
