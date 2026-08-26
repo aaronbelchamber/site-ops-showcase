@@ -1,0 +1,45 @@
+# AGENTS.md
+
+Read MISSION.md for what this is.
+
+## Repo name mismatch
+
+The local folder is `wordpress-site-manager-public`, but the actual GitHub
+repo is `aaronbelchamber/wordpress-site-manager` (no `-public` suffix). Use
+that name for any `gh` command, API call, issue link, or clone URL — the
+folder name will not match.
+
+## Running locally
+
+- Backend: `python manage.py init` once, then `python manage.py runserver`
+  (Flask, port 5000).
+- `run_dev.bat`: checks/installs Python deps, bootstraps `config/.env` and
+  `frontend/.env.local`, runs `npm install` if needed, and starts backend +
+  Vite dev server (5173, `/api` proxied to 5000) in separate windows.
+- `run.bat`: production-style — builds the frontend (`npm run build`) then
+  runs Flask with `--no-debug`.
+- Frontend commands (run inside `frontend/`): `npm run dev`, `npm run build`,
+  `npm run lint` (oxlint), `npm run test` (vitest).
+- Backend tests: `pytest` from repo root (`tests/`).
+- No `requirements.txt` is committed; dependencies are pip-installed directly
+  by the batch launchers. No GitHub Actions / CI in this repo.
+
+## Sync direction and drift risk
+
+This is a synced-out public release, not the canonical repo. Development
+happens in **wordpress-site-manager-private** first and is synced out here
+(private -> public, one-way). This repo has no dependency back on the
+private one — it's a full working copy — but independent edits to shared
+components here risk diverging from the private repo. Confirmed real case:
+both repos modified `HealthCheckDetails.jsx` in the same week (this repo
+added a Production Health dashboard; the private repo refactored the same
+component into a directory split), and the two versions are now different.
+Prefer making shared backend/UI logic changes in wordpress-site-manager-private
+and syncing them out, rather than changing them here independently.
+
+## What this is / isn't
+
+A public, standalone demonstration of infrastructure tooling — a real
+working tool (also manages Aaron's own sites), not a stripped-down demo, and
+with no dependency on any other project. Not the source of truth for ongoing
+development — see MISSION.md's Related projects section for details.
