@@ -10,9 +10,20 @@ covers health checks (HTTP/WP API status, screenshot diffing, console-error
 capture via a headless browser), a transactional update engine (pre-update
 health check, DB and file backup, apply, post-update verification, and
 auto-rollback on failure), WP-CLI vulnerability scanning, encrypted-at-rest
-credential storage (AES-256 Fernet), and automated Google Drive sync of
-config backups. The backend is Flask (`src/api/routes/`: health, updates,
-backups, sites, system, profiles); the frontend is a React/Vite SPA.
+credential storage (AES-256 Fernet), reusable SSH login profiles so a site
+doesn't need its credentials re-entered by hand (`src/api/routes/profiles.py`,
+surfaced as "Shared Login Profile" in `AddSiteForm.jsx`), and automated
+Google Drive sync of config backups. The backend is Flask
+(`src/api/routes/`: health, updates, backups, sites, system, profiles); the
+frontend is a React/Vite SPA.
+
+Login profiles shipped smaller than originally designed: [`settings_plan.md`](settings_plan.md)
+proposed a richer system -- named infra-type presets (`aws-lightsail`,
+`kinsta`, etc. with their own `wp_path`/`wp_cli_path` defaults), domain-match
+auto-fill rules, and JSON import/export. What actually shipped only reuses
+SSH credentials (host/port/user/key), manually named and applied -- no
+presets, no domain rules, no import/export. Not wrong, just smaller; the
+richer design in that doc is still there if it's ever worth revisiting.
 
 ## What this is for
 
