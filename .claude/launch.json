@@ -1,0 +1,27 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "backend",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["manage.py", "runserver", "--port", "5000", "--no-debug"],
+      "port": 5000,
+      "url": "http://localhost:5000"
+    },
+    {
+      "name": "dev server",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "cd frontend && npm run dev"],
+      "port": 5173,
+      "url": "http://localhost:5173",
+      "depends_on": ["backend"]
+    },
+    {
+      "name": "health-dashboard",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["manage.py", "health-dashboard", "--port", "5050", "--no-debug"],
+      "port": 5050,
+      "url": "http://localhost:5050"
+    }
+  ]
+}
