@@ -12,7 +12,8 @@
         "--no-debug"
       ],
       "port": 5000,
-      "url": "http://127.0.0.1:5000"
+      "url": "http://127.0.0.1:5000",
+      "health": "/health"
     },
     {
       "name": "dev server",
@@ -38,7 +39,8 @@
         "--no-debug"
       ],
       "port": 5050,
-      "url": "http://127.0.0.1:5050"
+      "url": "http://127.0.0.1:5050",
+      "health": "/health"
     }
   ]
 }

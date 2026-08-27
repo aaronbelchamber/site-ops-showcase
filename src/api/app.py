@@ -54,6 +54,21 @@ class AppFactory:
         
         app = Flask(__name__, static_folder=static_dir, static_url_path="")
         
+
+        @app.route("/health")
+        def health():
+            """This application's own liveness, distinct from /api/sites health.
+
+            The blueprint under /api/sites reports on the WordPress sites this
+            tool manages; this reports on the tool. A monitor asking "is the
+            site manager up" must not be answered with a remote site's status.
+
+            Kept cheap deliberately: it is polled on a timer, and reaching out
+            over SSH to prove liveness would make the check heavier than the
+            thing it checks.
+            """
+            return {"status": "ok", "service": "site-manager"}
+
         @app.route("/")
         @app.route("/site/add")
         @app.route("/site/<path:sitename>/edit")
