@@ -1,0 +1,108 @@
+# CI runs here, on the public half of the pair, where Actions minutes are free
+# and unlimited. wordpress-site-manager-private deliberately does not run its
+# own automatic suite: the two are near-identical by construction, so this run
+# is the coverage for both. See PREFERENCES.md, "Continuous integration".
+#
+# What this buys that a workstation cannot: a clean room. Every dependency here
+# was discovered by reading a Windows batch file until requirements.txt existed,
+# and that list had fallen behind the code. A fresh Ubuntu runner installing
+# from the manifest is the only thing that actually proves the manifest is
+# complete and that the suite is not quietly leaning on a Windows-only detail.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A second push while the first is still running makes the first result
+# worthless; cancel it rather than pay for both and read the older one.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: backend (python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      # Knowing whether a break is universal or specific to one version is the
+      # entire reason for a matrix.
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      - name: Install from the manifest, not from a remembered list
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Report the environment before trusting the result
+        # A green tick means nothing if the job did not have what it claims to
+        # be testing with. Printed as JSON so the log carries the evidence.
+        run: |
+          python - <<'PY'
+          import json, platform, sys
+          import importlib.metadata as md
+          packages = ["flask", "paramiko", "cryptography", "pyyaml", "requests",
+                      "pydantic", "waitress", "playwright", "pillow", "pytest"]
+          found = {}
+          for name in packages:
+              try:
+                  found[name] = md.version(name)
+              except md.PackageNotFoundError:
+                  found[name] = None
+          print(json.dumps({
+              "python": sys.version.split()[0],
+              "platform": platform.platform(),
+              "os_name": __import__("os").name,
+              "packages": found,
+          }, indent=2))
+          PY
+
+      - name: pytest
+        run: python -m pytest tests/ -q
+
+  frontend:
+    name: frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        working-directory: frontend
+        run: npm ci
+
+      - name: Report the environment
+        working-directory: frontend
+        run: node -e "console.log(JSON.stringify({node:process.version,platform:process.platform},null,2))"
+
+      - name: Lint
+        working-directory: frontend
+        run: npx oxlint
+
+      - name: Test
+        working-directory: frontend
+        run: npx vitest run
+
+      - name: Build must stay clean
+        working-directory: frontend
+        run: npx vite build

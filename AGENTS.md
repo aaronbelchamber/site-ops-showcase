@@ -32,9 +32,15 @@ folder name will not match.
 - Frontend commands (run inside `frontend/`): `npm run dev`, `npm run build`,
   `npm run lint` (oxlint), `npm run test` (vitest).
 - Backend tests: `pytest` from repo root (`tests/`).
-- No `requirements.txt` is committed; the batch launchers pip-install what is
-  needed directly: flask, python-dotenv, paramiko, pyyaml, cryptography,
-  requests. No GitHub Actions / CI in this repo.
+- Dependencies are declared in `requirements.txt` (runtime) and
+  `requirements-dev.txt` (adds pytest). The batch launchers used to be the only
+  record of them and had fallen behind the code -- Pillow, playwright, pydantic,
+  waitress and werkzeug are all imported and none were in that list.
+- **CI runs here**, in `.github/workflows/ci.yml`: pytest on Python 3.11 and
+  3.12, plus lint, tests and build for the frontend. This is the public half of
+  the pair, so Actions minutes are free, and this run is the coverage for both
+  repos -- `wordpress-site-manager-private` deliberately has no automatic suite
+  of its own.
 
 ## Sync direction and drift risk
 

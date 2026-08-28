@@ -1,0 +1,27 @@
+# Runtime dependencies.
+#
+# Until now these existed only inside run.bat and run_dev.bat, which meant the
+# only way to learn what this project needs was to read a Windows batch file --
+# and that list had fallen behind the code: Pillow, playwright, pydantic,
+# waitress and werkzeug are all imported and none of them were in it.
+#
+# Deliberately unpinned. This is a single-operator tool with no deployment to
+# reproduce, and an unpinned install is what surfaces an upstream break in CI
+# while it is still a small break.
+
+flask
+werkzeug
+waitress
+python-dotenv
+pydantic
+paramiko
+pyyaml
+cryptography
+requests
+urllib3
+
+# Imported lazily, inside the functions that need them, so the test suite runs
+# without either. Both are required for the features themselves: screenshot
+# capture and the image diff behind health checks.
+playwright
+pillow
