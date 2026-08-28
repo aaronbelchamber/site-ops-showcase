@@ -418,6 +418,29 @@ class TestSPAFallbackRouting(unittest.TestCase):
         self.app = create_app()
         self.client = self.app.test_client()
         self.html = {"Accept": "text/html"}
+        self._ensure_index_exists()
+
+    def _ensure_index_exists(self):
+        """Guarantee the one asset the fallback serves, rather than assuming it.
+
+        `static/index.html` is build output and is gitignored, so it exists on a
+        machine where the frontend has been built and nowhere else. These tests
+        passed locally for exactly that reason and failed on the first clean
+        checkout in CI: a hidden dependency on a previous `npm run build`, which
+        is the kind of thing only a clean room finds.
+
+        What is under test is the routing -- that a deep link reaches the SPA
+        instead of a JSON 404. That holds whatever the file contains, so a
+        placeholder is enough, and it is removed again afterwards so a real
+        build is never left replaced by this one.
+        """
+        index = os.path.join(self.app.static_folder or "", "index.html")
+        if os.path.exists(index):
+            return
+        os.makedirs(os.path.dirname(index), exist_ok=True)
+        with open(index, "w", encoding="utf-8") as handle:
+            handle.write("<!doctype html><title>test placeholder</title>")
+        self.addCleanup(lambda: os.path.exists(index) and os.remove(index))
 
     def _serves_spa(self, path):
         return self.client.get(path, headers=self.html).status_code == 200
