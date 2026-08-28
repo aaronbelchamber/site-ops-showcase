@@ -22,7 +22,10 @@ class TestBrowserSmoke(unittest.TestCase):
         cls.temp_dir = tempfile.mkdtemp()
         
         # 2. Setup environment variables (to be inherited by child python process)
-        cls.port = 5009
+        # 63050-63099 is the estate's slice for transient test servers; see
+        # PREFERENCES.md. 5009 was an arbitrary number that collided with
+        # nothing by luck rather than by design.
+        cls.port = 63050
         cls.api_token = "browser-secret-token"
         cls.encryption_key = "browser-test-encrypt-key-must-32"
         
