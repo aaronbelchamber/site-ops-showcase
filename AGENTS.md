@@ -1,3 +1,14 @@
+> **Standing preferences for this drive live outside this repo.**
+> Read `E:\central-project-hub\PREFERENCES.md` before working here. It covers
+> ports, launching processes without a window, URL hygiene, branch conventions,
+> script placement, file-size thresholds, verification, design systems,
+> self-review and session retros. It is canonical: where it and anything below
+> disagree, it wins, and the copy below is the thing to fix.
+>
+> If that path does not resolve -- a different machine, an unmounted drive --
+> recover it rather than carrying on as though there were no standing
+> preferences: `gh repo clone aaronbelchamber/central-project-hub`.
+
 # AGENTS.md
 
 Read MISSION.md for what this is.
@@ -21,8 +32,9 @@ folder name will not match.
 - Frontend commands (run inside `frontend/`): `npm run dev`, `npm run build`,
   `npm run lint` (oxlint), `npm run test` (vitest).
 - Backend tests: `pytest` from repo root (`tests/`).
-- No `requirements.txt` is committed; dependencies are pip-installed directly
-  by the batch launchers. No GitHub Actions / CI in this repo.
+- No `requirements.txt` is committed; the batch launchers pip-install what is
+  needed directly: flask, python-dotenv, paramiko, pyyaml, cryptography,
+  requests. No GitHub Actions / CI in this repo.
 
 ## Sync direction and drift risk
 
