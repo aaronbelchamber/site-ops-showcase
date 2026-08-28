@@ -19,7 +19,7 @@ if not exist static\index.html (
     popd
 )
 
-echo Starting standalone Production Health dashboard on port 5050...
+echo Starting standalone Production Health dashboard on port 63016...
 echo This is independent of run.bat/run_dev.bat and stays responsive even
 echo while the main app is busy running an update or health check.
 python manage.py health-dashboard --no-debug

@@ -23,10 +23,10 @@ folder name will not match.
 ## Running locally
 
 - Backend: `python manage.py init` once, then `python manage.py runserver`
-  (Flask, port 5000).
+  (Flask, port 63010).
 - `run_dev.bat`: checks/installs Python deps, bootstraps `config/.env` and
   `frontend/.env.local`, runs `npm install` if needed, and starts backend +
-  Vite dev server (5173, `/api` proxied to 5000) in separate windows.
+  Vite dev server (63014, `/api` proxied to 63010) in separate windows.
 - `run.bat`: production-style — builds the frontend (`npm run build`) then
   runs Flask with `--no-debug`.
 - Frontend commands (run inside `frontend/`): `npm run dev`, `npm run build`,

@@ -43,7 +43,7 @@ This guide is for developers setting up the WordPress Site Manager project local
 
 3. Open the app in the browser at:
    ```text
-   http://127.0.0.1:5173
+   http://127.0.0.1:63014
    ```
 
 ## Windows Launch Scripts

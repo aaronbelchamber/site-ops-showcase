@@ -76,14 +76,14 @@ class SiteManagerCLI:
         # 8. runserver
         def setup_runserver(p):
             p.add_argument("--host", default="127.0.0.1", help="Host address to bind to")
-            p.add_argument("--port", type=int, default=5000, help="Port to listen on")
+            p.add_argument("--port", type=int, default=63010, help="Port to listen on")
             p.add_argument("--no-debug", action="store_true", help="Disable debug mode")
         self._register("runserver", RunServerCommand, setup_runserver)
 
         # 8b. health-dashboard
         def setup_health_dashboard(p):
             p.add_argument("--host", default="127.0.0.1", help="Host address to bind to")
-            p.add_argument("--port", type=int, default=5050, help="Port to listen on")
+            p.add_argument("--port", type=int, default=63016, help="Port to listen on")
             p.add_argument("--no-debug", action="store_true", help="Disable debug mode")
         self._register("health-dashboard", HealthDashboardCommand, setup_health_dashboard)
 

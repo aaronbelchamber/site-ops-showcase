@@ -79,7 +79,7 @@ Start the backend server:
 ```bash
 python manage.py runserver
 ```
-Open **`http://127.0.0.1:5000`** in your browser.
+Open **`http://127.0.0.1:63010`** in your browser.
 
 #### Windows launchers
 Use the project batch launchers from the repo root:
@@ -125,7 +125,7 @@ run_dev.bat  :: frontend + backend development mode
 | `python manage.py add-site` | Interactive CLI site wizard |
 | `python manage.py list-sites` | Display configured WordPress sites |
 | `python manage.py test-connection` | Verify SSH, WP-CLI, & DB connectivity |
-| `python manage.py runserver` | Launch Flask API backend on port 5000 |
+| `python manage.py runserver` | Launch Flask API backend on port 63010 |
 | `pytest` | Execute full backend test suite |
 
 ---

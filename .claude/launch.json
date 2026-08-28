@@ -8,11 +8,11 @@
         "manage.py",
         "runserver",
         "--port",
-        "5000",
+        "63010",
         "--no-debug"
       ],
-      "port": 5000,
-      "url": "http://127.0.0.1:5000",
+      "port": 63010,
+      "url": "http://127.0.0.1:63010",
       "health": "/health"
     },
     {
@@ -22,8 +22,8 @@
         "/c",
         "cd frontend && npm run dev"
       ],
-      "port": 5173,
-      "url": "http://127.0.0.1:5173",
+      "port": 63014,
+      "url": "http://127.0.0.1:63014",
       "depends_on": [
         "backend"
       ]
@@ -35,11 +35,11 @@
         "manage.py",
         "health-dashboard",
         "--port",
-        "5050",
+        "63016",
         "--no-debug"
       ],
-      "port": 5050,
-      "url": "http://127.0.0.1:5050",
+      "port": 63016,
+      "url": "http://127.0.0.1:63016",
       "health": "/health"
     }
   ]

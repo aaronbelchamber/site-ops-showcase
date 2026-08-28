@@ -205,4 +205,4 @@ def serve_app(app: Flask, host: str, port: int, debug: bool, threads: int = 8) -
 if __name__ == "__main__":
     start_cleanup_scheduler(debug=True)
     app = create_app()
-    app.run(host="127.0.0.1", port=5000, debug=True)
+    app.run(host="127.0.0.1", port=63010, debug=True)

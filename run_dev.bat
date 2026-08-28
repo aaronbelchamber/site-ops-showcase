@@ -34,7 +34,7 @@ echo Launching development servers...
 echo.
 
 :: Start the Flask backend server in debug mode on a fixed port
-start "WP Site Manager Backend" cmd /k "python manage.py runserver --port 5000"
+start "WP Site Manager Backend" cmd /k "python manage.py runserver --port 63010"
 
 :: Start the Vite frontend development server on a fixed port
 pushd frontend
@@ -44,10 +44,10 @@ popd
 echo =========================================================================
 echo Development environment started successfully!
 echo.
-echo - Flask Backend (API): http://127.0.0.1:5000 (debug/auto-reload active)
-echo - Frontend App (Vite): http://localhost:5173 (hot updates active)
+echo - Flask Backend (API): http://127.0.0.1:63010 (debug/auto-reload active)
+echo - Frontend App (Vite): http://localhost:63014 (hot updates active)
 echo.
-echo Frontend requests to /api are proxied to port 5000 automatically.
+echo Frontend requests to /api are proxied to port 63010 automatically.
 echo Keep the launched terminal windows open. Close them to stop servers.
 echo =========================================================================
 echo.
