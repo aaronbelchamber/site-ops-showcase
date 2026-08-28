@@ -49,6 +49,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
 
+      - name: Install the browser the health-check tests actually drive
+        # playwright is imported lazily, so the suite *imports* without it --
+        # but test_browser_smoke and the browser half of test_health really do
+        # launch chromium, and skipping the download would turn genuine
+        # coverage into three silent failures. Chromium only: the other engines
+        # are download time nothing here uses.
+        run: python -m playwright install --with-deps chromium
+
       - name: Report the environment before trusting the result
         # A green tick means nothing if the job did not have what it claims to
         # be testing with. Printed as JSON so the log carries the evidence.
