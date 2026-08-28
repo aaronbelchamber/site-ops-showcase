@@ -111,8 +111,17 @@ class LocalExecutor(BaseExecutor):
                     if not chunk:
                         break
                     process.stdin.write(chunk)
-            process.stdin.close()
-            
+
+            # Deliberately NOT closing stdin here. communicate() flushes and
+            # closes it itself, and on POSIX doing it first makes that flush
+            # raise `ValueError: flush of closed file` -- so every call failed
+            # with exit_code -1 and an opaque message. Windows tolerates the
+            # double close, which is why this survived until the suite first
+            # ran on Linux.
+            #
+            # communicate() is what gives EOF to the child, and it drains
+            # stdout and stderr concurrently; reading them in sequence instead
+            # would deadlock as soon as a restore wrote enough to fill a pipe.
             stdout_data, stderr_data = process.communicate(timeout=timeout)
             return CommandResult(
                 exit_code=process.returncode,
