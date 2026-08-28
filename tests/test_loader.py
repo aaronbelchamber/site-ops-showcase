@@ -64,9 +64,47 @@ class TestLoader(unittest.TestCase):
         }
         loader.save_credentials(creds)
         self.assertTrue(os.path.exists(loader.CREDENTIALS_ENC_PATH))
-        
+
         loaded = loader.load_credentials()
         self.assertEqual(loaded, creds)
+
+    def test_legacy_credentials_file_decrypts_and_migrates(self):
+        """
+        A credentials.enc written before PBKDF2_ITERATIONS was raised (bare
+        salt + ciphertext, no version header) must still decrypt correctly,
+        and loading it should transparently re-encrypt it at the current
+        iteration count so it isn't stuck on the old, weaker value forever.
+        """
+        from src.config.crypto import CredentialEncryptor
+
+        creds = {"legacy-site": {"ssh_password": "legacy-pass"}}
+        encryption_key = loader.SiteConfigManager.get_encryption_key()
+
+        # Hand-build a pre-migration (legacy) file: 16-byte salt + Fernet
+        # ciphertext, no MAGIC header, encrypted at the old iteration count.
+        salt = os.urandom(CredentialEncryptor.SALT_SIZE)
+        key = CredentialEncryptor.derive_key(encryption_key, salt, CredentialEncryptor.LEGACY_PBKDF2_ITERATIONS)
+        from cryptography.fernet import Fernet
+        import json
+        ciphertext = Fernet(key).encrypt(json.dumps(creds).encode("utf-8"))
+        legacy_bytes = salt + ciphertext
+
+        os.makedirs(os.path.dirname(loader.CREDENTIALS_ENC_PATH), exist_ok=True)
+        with open(loader.CREDENTIALS_ENC_PATH, "wb") as f:
+            f.write(legacy_bytes)
+
+        self.assertTrue(CredentialEncryptor.is_legacy_format(legacy_bytes))
+
+        loaded = loader.load_raw_credentials()
+        self.assertEqual(loaded, creds)
+
+        with open(loader.CREDENTIALS_ENC_PATH, "rb") as f:
+            migrated_bytes = f.read()
+        self.assertFalse(CredentialEncryptor.is_legacy_format(migrated_bytes))
+
+        # Re-reading after migration must still return the same data.
+        reloaded = loader.load_raw_credentials()
+        self.assertEqual(reloaded, creds)
 
     def test_load_save_sites_config(self):
         sites = {

@@ -2,10 +2,37 @@ import React, { useState, useEffect } from "react";
 import api from "../services/api";
 import { showToast } from "../services/toast";
 import AddSiteForm from "./AddSiteForm";
+import { useConfirm } from "../hooks/useConfirm";
+
+const MANAGE_SITES_TABS = ["discovered", "add", "configured"];
+
+// Reads the active tab from the URL path (/manage-sites/{tab}), so tab state
+// survives a refresh and Back/Forward move between tabs instead of exiting
+// the whole view. Mirrors the ?tab= pattern in SiteDetails.jsx.
+function tabFromLocation() {
+    const match = window.location.pathname.match(/^\/manage-sites\/([^/]+)\/?$/);
+    if (match && MANAGE_SITES_TABS.includes(match[1])) return match[1];
+    return null;
+}
 
 export default function ManageSitesView({ initialTab = "discovered", onBackToDashboard, onSitesUpdated }) {
-    const [activeTab, setActiveTab] = useState(initialTab); // "discovered", "add", "configured"
-    
+    const { confirm, confirmDialog } = useConfirm();
+    const [activeTab, setActiveTabState] = useState(() => tabFromLocation() || initialTab); // "discovered", "add", "configured"
+
+    const setActiveTab = (tabName) => {
+        setActiveTabState(tabName);
+        window.history.pushState({}, "", `/manage-sites/${tabName}`);
+    };
+
+    useEffect(() => {
+        const syncTabFromUrl = () => {
+            const tab = tabFromLocation();
+            if (tab) setActiveTabState(tab);
+        };
+        window.addEventListener("popstate", syncTabFromUrl);
+        return () => window.removeEventListener("popstate", syncTabFromUrl);
+    }, []);
+
     // Configured Sites list state
     const [configuredSites, setConfiguredSites] = useState([]);
     const [loadingConfigured, setLoadingConfigured] = useState(false);
@@ -78,9 +105,11 @@ export default function ManageSitesView({ initialTab = "discovered", onBackToDas
         }
     }, [activeTab]);
 
-    // Handle importing a discovered site
-    const handleImportDiscovered = async (site) => {
-        try {
+    // Performs the import and lets errors propagate. handleImportDiscovered
+    // wraps this for single-site use; bulk import needs the throw so it can
+    // count real successes.
+    const importDiscoveredSite = async (site) => {
+        {
             const hasConnectionInfo = site.credential_profile || (site.ssh_host && site.ssh_user);
             const siteSlug = site.name.toLowerCase().replace(/[^a-z0-9]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "") || "scanned-site";
             
@@ -102,6 +131,13 @@ export default function ManageSitesView({ initialTab = "discovered", onBackToDas
             };
 
             await api.addSite(newSiteData);
+        }
+    };
+
+    // Handle importing a single discovered site
+    const handleImportDiscovered = async (site) => {
+        try {
+            await importDiscoveredSite(site);
             showToast(`Site '${site.name}' imported successfully!`, "success");
             await loadConfiguredSites();
             loadScanData(false);
@@ -110,24 +146,45 @@ export default function ManageSitesView({ initialTab = "discovered", onBackToDas
         }
     };
 
-    // Handle bulk import
+    // Handle bulk import.
+    //
+    // This used to call handleImportDiscovered, which swallows its own errors
+    // and never rethrows -- so the catch here could not fire and every item
+    // counted as a success ("imported 10 site(s)" when 8 had failed). It also
+    // reloaded the site list and re-ran the discovery scan once per item.
     const handleBulkImport = async (pathsToImport) => {
         if (!pathsToImport || pathsToImport.length === 0) return;
         setBulkImporting(true);
+        const failures = [];
         let successCount = 0;
-        for (const path of pathsToImport) {
-            const site = flatResults.find(r => r.wp_path === path);
-            if (site && !site.already_imported) {
+        try {
+            for (const path of pathsToImport) {
+                const site = flatResults.find(r => r.wp_path === path);
+                if (!site || site.already_imported) continue;
                 try {
-                    await handleImportDiscovered(site);
+                    await importDiscoveredSite(site);
                     successCount++;
                 } catch (e) {
                     console.error("Bulk import item error:", e);
+                    failures.push(`${site.name}: ${e.message}`);
                 }
             }
+        } finally {
+            // Refresh once, after the whole batch.
+            await loadConfiguredSites();
+            loadScanData(false);
+            setBulkImporting(false);
         }
-        setBulkImporting(false);
-        showToast(`Bulk import completed. Successfully imported ${successCount} site(s).`, "success");
+
+        if (failures.length === 0) {
+            showToast(`Bulk import complete: ${successCount} site(s) imported.`, "success");
+        } else {
+            showToast(
+                `Bulk import finished with errors: ${successCount} imported, ${failures.length} failed.`,
+                "error",
+                { title: "Bulk import", details: failures.join(String.fromCharCode(10)) }
+            );
+        }
     };
 
     // Archive / Unarchive site status toggle
@@ -136,7 +193,14 @@ export default function ManageSitesView({ initialTab = "discovered", onBackToDas
         const newStatus = isArchived ? "Ready" : "Archived";
         const actionLabel = isArchived ? "Unarchive" : "Archive";
 
-        if (!confirm(`Are you sure you want to ${actionLabel.toLowerCase()} site "${site.display_name}" (${site.site_name})?`)) {
+        const ok = await confirm({
+            title: `${actionLabel} site?`,
+            message: isArchived
+                ? `"${site.display_name}" will return to Ready status and resume monitoring.`
+                : `"${site.display_name}" will be archived and excluded from routine monitoring. You can unarchive it later.`,
+            confirmLabel: actionLabel,
+        });
+        if (!ok) {
             return;
         }
 
@@ -154,7 +218,14 @@ export default function ManageSitesView({ initialTab = "discovered", onBackToDas
 
     // Delete site permanently
     const handleDeleteConfiguredSite = async (site) => {
-        if (!confirm(`DANGER: Are you sure you want to permanently delete site "${site.display_name}" (${site.site_name})? This will remove its configuration and credentials from Site Manager. This action cannot be undone.`)) {
+        const ok = await confirm({
+            title: "Permanently delete this site?",
+            message: `"${site.display_name}" will be removed from Site Manager along with its configuration and stored credentials. This cannot be undone.`,
+            requireTyped: site.site_name,
+            confirmLabel: "Delete site",
+            destructive: true,
+        });
+        if (!ok) {
             return;
         }
 
@@ -217,6 +288,7 @@ export default function ManageSitesView({ initialTab = "discovered", onBackToDas
 
     return (
         <div className="manage-sites-container">
+            {confirmDialog}
             
             {/* Top Navigation Header */}
             <div className="manage-sites-header">
@@ -237,23 +309,29 @@ export default function ManageSitesView({ initialTab = "discovered", onBackToDas
             </div>
 
             {/* Sub-Nav Tabs */}
-            <div className="manage-sites-tabs">
+            <div className="md-tabs manage-sites-tabs" role="tablist" aria-label="Manage sites sections">
                 <button 
-                    className={`md-button tab-button ${activeTab === "discovered" ? "tab-button-active" : "tab-button-passive"}`}
+                    className={`md-tab ${activeTab === "discovered" ? "active" : ""}`}
+                    role="tab"
+                    aria-selected={activeTab === "discovered"}
                     onClick={() => setActiveTab("discovered")}
                 >
                     <span className="material-symbols-outlined">radar</span> Discovered / Scan Sites
                 </button>
 
                 <button 
-                    className={`md-button tab-button ${activeTab === "add" ? "tab-button-active" : "tab-button-passive"}`}
+                    className={`md-tab ${activeTab === "add" ? "active" : ""}`}
+                    role="tab"
+                    aria-selected={activeTab === "add"}
                     onClick={() => setActiveTab("add")}
                 >
                     <span className="material-symbols-outlined">add_circle</span> Add Site Manually
                 </button>
 
                 <button 
-                    className={`md-button tab-button ${activeTab === "configured" ? "tab-button-active" : "tab-button-passive"}`}
+                    className={`md-tab ${activeTab === "configured" ? "active" : ""}`}
+                    role="tab"
+                    aria-selected={activeTab === "configured"}
                     onClick={() => setActiveTab("configured")}
                 >
                     <span className="material-symbols-outlined">inventory_2</span> Configured Sites ({configuredSites.length})

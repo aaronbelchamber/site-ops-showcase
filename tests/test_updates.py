@@ -170,6 +170,28 @@ class TestUpdates(unittest.TestCase):
         self.assertEqual(res["steps"][1]["type"], "theme")
         self.assertEqual(res["steps"][2]["type"], "core")
 
+    def test_update_core_reraises_original_error_even_if_history_write_fails(self):
+        """
+        _write_history_best_effort must swallow a failure in the history write
+        itself so it doesn't mask the update failure that's being reported.
+        """
+        self.manager.core_updater.update = MagicMock(side_effect=RuntimeError("core update boom"))
+        with patch.object(self.manager, "_write_history", side_effect=OSError("disk full")):
+            with self.assertRaises(RuntimeError) as ctx:
+                self.manager.update_core(major=False)
+        self.assertEqual(str(ctx.exception), "core update boom")
+
+    def test_update_core_writes_failure_history_record(self):
+        self.manager.core_updater.update = MagicMock(side_effect=RuntimeError("core update boom"))
+        with self.assertRaises(RuntimeError):
+            self.manager.update_core(major=False)
+
+        with open(self.manager.log_file, "r", encoding="utf-8") as f:
+            record = json.loads(f.readline())
+        self.assertEqual(record["status"], "failed")
+        self.assertEqual(record["type"], "core")
+        self.assertIn("core update boom", record["error"])
+
     def test_plugin_check_updates(self):
         self.mock_wp_cli.check_plugin_updates.return_value = [{"name": "akismet", "version": "5.0", "update_version": "5.1"}]
         res = self.manager.plugin_updater.check_updates()

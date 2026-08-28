@@ -4,6 +4,9 @@ backups/
 config/.env
 config/credentials.enc
 config/sites.yaml
+# Hand-made backups of it carry the same site topology (hosts, paths,
+# db names) and were not covered by the line above.
+config/sites.yaml.bak*
 config/discovered_sites.json
 config/admin_data.json
 config/admin_notes.txt

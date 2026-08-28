@@ -48,5 +48,29 @@ class TestCrypto(unittest.TestCase):
         with self.assertRaises(Exception):
             CredentialEncryptor.decrypt_credentials(encrypted, "wrong-passphrase")
 
+    def test_new_format_is_not_legacy(self):
+        encrypted = CredentialEncryptor.encrypt_credentials(self.test_data, self.passphrase)
+        self.assertTrue(encrypted.startswith(CredentialEncryptor.MAGIC))
+        self.assertFalse(CredentialEncryptor.is_legacy_format(encrypted))
+
+    def test_legacy_format_bare_salt_and_ciphertext_still_decrypts(self):
+        """
+        Files written before the versioned format existed are just a 16-byte
+        salt followed by Fernet ciphertext, always at LEGACY_PBKDF2_ITERATIONS.
+        Raising PBKDF2_ITERATIONS must not strand these files undecryptable.
+        """
+        from cryptography.fernet import Fernet
+        import json as json_module
+
+        salt = os.urandom(CredentialEncryptor.SALT_SIZE)
+        key = CredentialEncryptor.derive_key(self.passphrase, salt, CredentialEncryptor.LEGACY_PBKDF2_ITERATIONS)
+        ciphertext = Fernet(key).encrypt(json_module.dumps(self.test_data).encode("utf-8"))
+        legacy_encrypted = salt + ciphertext
+
+        self.assertTrue(CredentialEncryptor.is_legacy_format(legacy_encrypted))
+
+        decrypted = CredentialEncryptor.decrypt_credentials(legacy_encrypted, self.passphrase)
+        self.assertEqual(decrypted, self.test_data)
+
 if __name__ == "__main__":
     unittest.main()

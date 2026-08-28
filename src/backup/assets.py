@@ -3,7 +3,7 @@ import shlex
 import time
 from typing import List
 from src.execution.base import BaseExecutor
-from src.execution.local import LocalExecutor
+from src.execution.shell import is_windows_local, quote_path
 
 class AssetBackup:
     def __init__(self, executor: BaseExecutor, wp_path: str, local_backup_path: str, include_media: bool):
@@ -33,10 +33,14 @@ class AssetBackup:
             excludes.extend(["wp-content/uploads", "./wp-content/uploads"])
             
         exclude_args = " ".join([f"--exclude={shlex.quote(ex)}" for ex in excludes])
-        
+
         # We cd into the parent directory and tar the directory itself, or cd inside and tar .
-        # Cding inside and tarring . is cleaner for restore.
-        cmd = f"tar -czf - -C {shlex.quote(self.wp_path)} {exclude_args} ."
+        # Cding inside and tarring . is cleaner for restore. wp_path is
+        # operator-supplied, so it needs shell-appropriate quoting: on a
+        # locally-managed Windows site this command runs through cmd.exe,
+        # which shlex.quote's single-quote style doesn't work for.
+        quoted_wp_path = quote_path(self.wp_path, "wp_path", is_windows_local(self.executor))
+        cmd = f"tar -czf - -C {quoted_wp_path} {exclude_args} ."
         
         res = self.executor.execute_stream(cmd, full_local_path)
         if not res.success:
@@ -54,7 +58,7 @@ class AssetBackup:
             raise FileNotFoundError(f"Backup file not found: {backup_path}")
             
         temp_old = f"{target_path}.old"
-        is_win = isinstance(self.executor, LocalExecutor) and os.name == "nt"
+        is_win = is_windows_local(self.executor)
         
         if is_win:
             tp = target_path.replace("\\", "/")

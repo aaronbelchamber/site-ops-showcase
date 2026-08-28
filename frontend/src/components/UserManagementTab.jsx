@@ -1,13 +1,13 @@
 import React, { useState, useEffect } from "react";
 import api from "../services/api";
 import { showToast } from "../services/toast";
+import { useConfirm } from "../hooks/useConfirm";
 
 export default function UserManagementTab({ siteName }) {
     const [users, setUsers] = useState([]);
     const [lastChecked, setLastChecked] = useState(null);
     const [loading, setLoading] = useState(true);
-    const [deleteModalUser, setDeleteModalUser] = useState(null);
-    const [reassignId, setReassignId] = useState("");
+    const { confirm, confirmDialog } = useConfirm();
 
     const fetchUsers = async () => {
         setLoading(true);
@@ -52,13 +52,39 @@ export default function UserManagementTab({ siteName }) {
         }
     };
 
-    const handleDelete = async () => {
-        if (!deleteModalUser || !reassignId) return;
+    const handleDeleteClick = async (user) => {
+        const otherAdmin = users.find((otherUser) => otherUser.ID !== user.ID
+            && (otherUser.roles === "administrator" || (Array.isArray(otherUser.roles) && otherUser.roles.includes("administrator"))));
+
+        const reassignId = await confirm({
+            title: `Delete User: ${user.user_login}`,
+            message: "Content owned by this user must be reassigned to another user prior to deletion.",
+            destructive: true,
+            confirmLabel: "Confirm Delete",
+            requireExtraValue: true,
+            initialExtraValue: otherAdmin ? String(otherAdmin.ID) : "",
+            renderExtra: (value, setValue) => (
+                <>
+                    <label htmlFor="umtReassignSelect">Reassign Content To (User ID):</label>
+                    <select
+                        id="umtReassignSelect"
+                        value={value}
+                        onChange={(e) => setValue(e.target.value)}
+                        className="umt-modal-select"
+                    >
+                        <option value="">Select target user</option>
+                        {users.filter((u) => u.ID !== user.ID).map((u) => (
+                            <option key={u.ID} value={u.ID}>{u.user_login} (ID: {u.ID})</option>
+                        ))}
+                    </select>
+                </>
+            ),
+        });
+        if (!reassignId) return;
+
         try {
-            await api.deleteUser(siteName, deleteModalUser.ID, reassignId);
+            await api.deleteUser(siteName, user.ID, reassignId);
             showToast("User deleted and content reassigned", "success");
-            setDeleteModalUser(null);
-            setReassignId("");
             fetchUsers();
         } catch (err) {
             showToast(`Deletion failed: ${err.message}`, "error");
@@ -66,15 +92,15 @@ export default function UserManagementTab({ siteName }) {
     };
 
     if (loading) {
-        return <div style={{ padding: "1rem" }}>Loading WordPress users...</div>;
+        return <div className="umt-loading">Loading WordPress users...</div>;
     }
 
     return (
-        <div style={{ marginTop: "1rem" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
+        <div className="umt-root">
+            <div className="umt-header">
                 <div>
-                    <h3 style={{ margin: 0 }}>WordPress Users</h3>
-                    <span style={{ fontSize: "0.85rem", color: "var(--md-sys-color-outline)" }}>
+                    <h3 className="umt-m0">WordPress Users</h3>
+                    <span className="umt-meta">
                         {lastChecked ? `Last fetched: ${new Date(lastChecked).toLocaleString()}` : "Never checked"}
                     </span>
                 </div>
@@ -83,30 +109,30 @@ export default function UserManagementTab({ siteName }) {
                 </button>
             </div>
 
-            
-            <table className="md-table" style={{ width: "100%", borderCollapse: "collapse" }}>
+
+            <table className="md-table umt-table">
                 <thead>
                     <tr>
-                        <th style={{ textAlign: "left", padding: "0.5rem" }}>ID</th>
-                        <th style={{ textAlign: "left", padding: "0.5rem" }}>Username</th>
-                        <th style={{ textAlign: "left", padding: "0.5rem" }}>Display Name</th>
-                        <th style={{ textAlign: "left", padding: "0.5rem" }}>Email</th>
-                        <th style={{ textAlign: "left", padding: "0.5rem" }}>Role</th>
-                        <th style={{ textAlign: "left", padding: "0.5rem" }}>Actions</th>
+                        <th>ID</th>
+                        <th>Username</th>
+                        <th>Display Name</th>
+                        <th>Email</th>
+                        <th>Role</th>
+                        <th>Actions</th>
                     </tr>
                 </thead>
                 <tbody>
                     {users.map((u) => (
-                        <tr key={u.ID} style={{ borderBottom: "1px solid var(--md-sys-color-outline-variant)" }}>
-                            <td style={{ padding: "0.5rem" }}>{u.ID}</td>
-                            <td style={{ padding: "0.5rem" }}><strong>{u.user_login}</strong></td>
-                            <td style={{ padding: "0.5rem" }}>{u.display_name}</td>
-                            <td style={{ padding: "0.5rem" }}>{u.user_email}</td>
-                            <td style={{ padding: "0.5rem" }}>
-                                <select 
+                        <tr key={u.ID}>
+                            <td>{u.ID}</td>
+                            <td><strong>{u.user_login}</strong></td>
+                            <td>{u.display_name}</td>
+                            <td>{u.user_email}</td>
+                            <td>
+                                <select
                                     value={Array.isArray(u.roles) ? u.roles[0] : u.roles || "subscriber"}
                                     onChange={(e) => handleRoleChange(u.ID, e.target.value)}
-                                    style={{ padding: "0.25rem 0.5rem", borderRadius: "4px" }}
+                                    className="umt-role-select"
                                 >
                                     <option value="administrator">administrator</option>
                                     <option value="editor">editor</option>
@@ -115,23 +141,17 @@ export default function UserManagementTab({ siteName }) {
                                     <option value="subscriber">subscriber</option>
                                 </select>
                             </td>
-                            <td style={{ padding: "0.5rem", display: "flex", gap: "0.5rem" }}>
-                                <button 
-                                    className="md-button md-button-outlined" 
-                                    style={{ fontSize: "0.75rem", padding: "0.25rem 0.5rem" }}
+                            <td className="umt-actions-cell">
+                                <button
+                                    className="md-button md-button-outlined umt-btn-xs"
                                     onClick={() => handleDeactivate(u.ID)}
                                     title="Demote to subscriber and randomize password"
                                 >
                                     Deactivate
                                 </button>
-                                <button 
-                                    className="md-button md-button-error" 
-                                    style={{ fontSize: "0.75rem", padding: "0.25rem 0.5rem" }}
-                                    onClick={() => {
-                                        setDeleteModalUser(u);
-                                        const other = users.find((otherUser) => otherUser.ID !== u.ID && (otherUser.roles === "administrator" || (Array.isArray(otherUser.roles) && otherUser.roles.includes("administrator"))));
-                                        if (other) setReassignId(other.ID);
-                                    }}
+                                <button
+                                    className="md-button md-button-error umt-btn-xs"
+                                    onClick={() => handleDeleteClick(u)}
                                 >
                                     Delete
                                 </button>
@@ -141,31 +161,7 @@ export default function UserManagementTab({ siteName }) {
                 </tbody>
             </table>
 
-            {deleteModalUser && (
-                <div style={{ position: "fixed", inset: 0, backgroundColor: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
-                    <div style={{ backgroundColor: "var(--md-sys-color-surface)", padding: "1.5rem", borderRadius: "8px", maxWidth: "400px", width: "100%" }}>
-                        <h4>Delete User: {deleteModalUser.user_login}</h4>
-                        <p style={{ fontSize: "0.875rem", margin: "0.5rem 0" }}>
-                            Content owned by this user must be reassigned to another user prior to deletion.
-                        </p>
-                        <label style={{ display: "block", fontSize: "0.875rem", marginBottom: "0.5rem" }}>Reassign Content To (User ID):</label>
-                        <select 
-                            value={reassignId} 
-                            onChange={(e) => setReassignId(e.target.value)}
-                            style={{ width: "100%", padding: "0.5rem", marginBottom: "1rem" }}
-                        >
-                            <option value="">Select target user</option>
-                            {users.filter(u => u.ID !== deleteModalUser.ID).map(u => (
-                                <option key={u.ID} value={u.ID}>{u.user_login} (ID: {u.ID})</option>
-                            ))}
-                        </select>
-                        <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem" }}>
-                            <button className="md-button md-button-outlined" onClick={() => setDeleteModalUser(null)}>Cancel</button>
-                            <button className="md-button md-button-error" disabled={!reassignId} onClick={handleDelete}>Confirm Delete</button>
-                        </div>
-                    </div>
-                </div>
-            )}
+            {confirmDialog}
         </div>
     );
 }

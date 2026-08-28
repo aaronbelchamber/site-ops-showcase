@@ -2,13 +2,14 @@ import time
 import os
 import json
 from typing import Optional
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request
 from src.config.loader import load_sites_config, load_credentials, PROJECT_ROOT
 from src.execution import get_executor
 from src.wp.cli import WPCLI
 from src.update.manager import UpdateManager
 from src.api.auth import require_api_key
-from src.api.tasks import start_task, operation_in_progress_response
+from src.api.tasks import start_task, operation_in_progress_response, site_operation
+from src.api.response import ok, err
 
 updates_bp = Blueprint("updates", __name__)
 
@@ -126,7 +127,7 @@ class UpdatesController:
         try:
             sites = load_sites_config()
             if site_name not in sites:
-                return jsonify({"success": False, "data": None, "error": f"Site '{site_name}' not found.", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 404
+                return err(f"Site '{site_name}' not found.", 404)
                 
             force = request.args.get("force", "false").lower() == "true"
             is_async = request.args.get("async", "false").lower() == "true" or request.args.get("background", "false").lower() == "true"
@@ -141,15 +142,11 @@ class UpdatesController:
                         is_stale = UpdatesController._is_stale(cached_data.get("timestamp"))
                         cached_data["is_stale"] = is_stale
                         if not is_stale:
-                            return jsonify({
-                                "success": True,
-                                "data": cached_data,
-                                "error": None,
-                                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                            })
+                            return ok(cached_data)
                     except Exception:
+                        # Cache read failed; continue to fallback logic
                         pass
-                
+
                 # If site is not Ready, we should not attempt a live check; return cached/fallback
                 site_config = sites[site_name]
                 if site_config.get("status", "Ready") != "Ready":
@@ -158,38 +155,19 @@ class UpdatesController:
                             with open(cache_file, "r", encoding="utf-8") as f:
                                 cached_data = json.load(f)
                             cached_data["is_stale"] = UpdatesController._is_stale(cached_data.get("timestamp"))
-                            return jsonify({
-                                "success": True,
-                                "data": cached_data,
-                                "error": None,
-                                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                            })
+                            return ok(cached_data)
                         except Exception:
+                            # Fallback cache also corrupted; return stale indicator
                             pass
-                    return jsonify({
-                        "success": True,
-                        "data": {"is_stale": True, "site_name": site_name, "timestamp": None},
-                        "error": None,
-                        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                    })
+                    return ok({"is_stale": True, "site_name": site_name, "timestamp": None})
 
             site_config = sites[site_name]
             if site_config.get("status", "Ready") != "Ready":
-                return jsonify({
-                    "success": False,
-                    "data": None,
-                    "error": f"Site '{site_name}' has status '{site_config.get('status', 'Ready')}'. Operations are only permitted on sites with 'Ready' status.",
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                }), 400
+                return err(f"Site '{site_name}' has status '{site_config.get('status', 'Ready')}'. Operations are only permitted on sites with 'Ready' status.", 400)
                 
             wp_path = site_config.get("wp_path")
             if not wp_path:
-                return jsonify({
-                    "success": False,
-                    "data": None,
-                    "error": f"WordPress path (wp_path) is not configured for site '{site_name}'. Please edit the site configuration first.",
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                }), 400
+                return err(f"WordPress path (wp_path) is not configured for site '{site_name}'. Please edit the site configuration first.", 400)
 
             if is_async:
                 task_id = start_task(
@@ -199,42 +177,33 @@ class UpdatesController:
                 )
                 if task_id is None:
                     return operation_in_progress_response(site_name)
-                return jsonify({
-                    "success": True,
-                    "data": {"task_id": task_id, "status": "running"},
-                    "error": None,
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                })
+                return ok({"task_id": task_id, "status": "running"})
 
-            # If synchronous force=true, connect and run the updates check
-            credentials = load_credentials()
-            site_config_with_name = {**site_config, "site_name": site_name}
-            executor = get_executor(site_config_with_name, credentials)
-            
-            try:
-                wp_cli = WPCLI(executor, wp_path, site_config.get("wp_cli_path"))
-                mgr = UpdateManager(site_config, credentials, executor, wp_cli)
-                updates_data = mgr.check_all_updates()
-                updates_data["is_stale"] = False
-                
-                # Save to cache
-                mgr.save_cached_updates(updates_data)
-                
-                return jsonify({
-                    "success": True,
-                    "data": updates_data,
-                    "error": None,
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                })
-            finally:
-                executor.disconnect()
+            # If synchronous force=true, connect and run the updates check.
+            # This opens SSH and runs WP-CLI inline, so it serialises against
+            # background tasks on the same site like every other live operation.
+            with site_operation(site_name) as acquired:
+                if not acquired:
+                    return operation_in_progress_response(site_name)
+
+                credentials = load_credentials()
+                site_config_with_name = {**site_config, "site_name": site_name}
+                executor = get_executor(site_config_with_name, credentials)
+
+                try:
+                    wp_cli = WPCLI(executor, wp_path, site_config.get("wp_cli_path"))
+                    mgr = UpdateManager(site_config, credentials, executor, wp_cli)
+                    updates_data = mgr.check_all_updates()
+                    updates_data["is_stale"] = False
+
+                    # Save to cache
+                    mgr.save_cached_updates(updates_data)
+
+                    return ok(updates_data)
+                finally:
+                    executor.disconnect()
         except Exception as e:
-            return jsonify({
-                "success": False,
-                "data": None,
-                "error": str(e),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }), 500
+            return err(str(e), 500)
 
     @staticmethod
     @require_api_key
@@ -242,16 +211,11 @@ class UpdatesController:
         try:
             sites = load_sites_config()
             if site_name not in sites:
-                return jsonify({"success": False, "data": None, "error": f"Site '{site_name}' not found.", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 404
+                return err(f"Site '{site_name}' not found.", 404)
                 
             site_config = sites[site_name]
             if site_config.get("status", "Ready") != "Ready":
-                return jsonify({
-                    "success": False,
-                    "data": None,
-                    "error": f"Site '{site_name}' has status '{site_config.get('status', 'Ready')}'. Operations are only permitted on sites with 'Ready' status.",
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                }), 400
+                return err(f"Site '{site_name}' has status '{site_config.get('status', 'Ready')}'. Operations are only permitted on sites with 'Ready' status.", 400)
                 
             body = request.get_json() or {}
             major = bool(body.get("major", False))
@@ -278,19 +242,9 @@ class UpdatesController:
             if task_id is None:
                 return operation_in_progress_response(site_name)
 
-            return jsonify({
-                "success": True,
-                "data": {"task_id": task_id, "status": "running"},
-                "error": None,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            })
+            return ok({"task_id": task_id, "status": "running"})
         except Exception as e:
-            return jsonify({
-                "success": False,
-                "data": None,
-                "error": str(e),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }), 500
+            return err(str(e), 500)
 
     @staticmethod
     @require_api_key
@@ -298,16 +252,11 @@ class UpdatesController:
         try:
             sites = load_sites_config()
             if site_name not in sites:
-                return jsonify({"success": False, "data": None, "error": f"Site '{site_name}' not found.", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 404
+                return err(f"Site '{site_name}' not found.", 404)
                 
             site_config = sites[site_name]
             if site_config.get("status", "Ready") != "Ready":
-                return jsonify({
-                    "success": False,
-                    "data": None,
-                    "error": f"Site '{site_name}' has status '{site_config.get('status', 'Ready')}'. Operations are only permitted on sites with 'Ready' status.",
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                }), 400
+                return err(f"Site '{site_name}' has status '{site_config.get('status', 'Ready')}'. Operations are only permitted on sites with 'Ready' status.", 400)
                 
             body = request.get_json() or {}
             plugin = body.get("plugin")
@@ -334,19 +283,9 @@ class UpdatesController:
             if task_id is None:
                 return operation_in_progress_response(site_name)
 
-            return jsonify({
-                "success": True,
-                "data": {"task_id": task_id, "status": "running"},
-                "error": None,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            })
+            return ok({"task_id": task_id, "status": "running"})
         except Exception as e:
-            return jsonify({
-                "success": False,
-                "data": None,
-                "error": str(e),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }), 500
+            return err(str(e), 500)
 
     @staticmethod
     @require_api_key
@@ -354,16 +293,11 @@ class UpdatesController:
         try:
             sites = load_sites_config()
             if site_name not in sites:
-                return jsonify({"success": False, "data": None, "error": f"Site '{site_name}' not found.", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 404
+                return err(f"Site '{site_name}' not found.", 404)
                 
             site_config = sites[site_name]
             if site_config.get("status", "Ready") != "Ready":
-                return jsonify({
-                    "success": False,
-                    "data": None,
-                    "error": f"Site '{site_name}' has status '{site_config.get('status', 'Ready')}'. Operations are only permitted on sites with 'Ready' status.",
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                }), 400
+                return err(f"Site '{site_name}' has status '{site_config.get('status', 'Ready')}'. Operations are only permitted on sites with 'Ready' status.", 400)
                 
             body = request.get_json() or {}
             theme = body.get("theme")
@@ -390,19 +324,9 @@ class UpdatesController:
             if task_id is None:
                 return operation_in_progress_response(site_name)
 
-            return jsonify({
-                "success": True,
-                "data": {"task_id": task_id, "status": "running"},
-                "error": None,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            })
+            return ok({"task_id": task_id, "status": "running"})
         except Exception as e:
-            return jsonify({
-                "success": False,
-                "data": None,
-                "error": str(e),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }), 500
+            return err(str(e), 500)
 
     @staticmethod
     @require_api_key
@@ -410,16 +334,11 @@ class UpdatesController:
         try:
             sites = load_sites_config()
             if site_name not in sites:
-                return jsonify({"success": False, "data": None, "error": f"Site '{site_name}' not found.", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 404
+                return err(f"Site '{site_name}' not found.", 404)
                 
             site_config = sites[site_name]
             if site_config.get("status", "Ready") != "Ready":
-                return jsonify({
-                    "success": False,
-                    "data": None,
-                    "error": f"Site '{site_name}' has status '{site_config.get('status', 'Ready')}'. Operations are only permitted on sites with 'Ready' status.",
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                }), 400
+                return err(f"Site '{site_name}' has status '{site_config.get('status', 'Ready')}'. Operations are only permitted on sites with 'Ready' status.", 400)
                 
             body = request.get_json() or {}
             if "create_backup" in body:
@@ -443,19 +362,9 @@ class UpdatesController:
             if task_id is None:
                 return operation_in_progress_response(site_name)
 
-            return jsonify({
-                "success": True,
-                "data": {"task_id": task_id, "status": "running"},
-                "error": None,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            })
+            return ok({"task_id": task_id, "status": "running"})
         except Exception as e:
-            return jsonify({
-                "success": False,
-                "data": None,
-                "error": str(e),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }), 500
+            return err(str(e), 500)
 
     @staticmethod
     @require_api_key
@@ -463,25 +372,15 @@ class UpdatesController:
         try:
             sites = load_sites_config()
             if site_name not in sites:
-                return jsonify({"success": False, "data": None, "error": f"Site '{site_name}' not found.", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 404
+                return err(f"Site '{site_name}' not found.", 404)
                 
             site_config = sites[site_name]
             if site_config.get("status", "Ready") != "Ready":
-                return jsonify({
-                    "success": False,
-                    "data": None,
-                    "error": f"Site '{site_name}' has status '{site_config.get('status', 'Ready')}'. Operations are only permitted on sites with 'Ready' status.",
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                }), 400
+                return err(f"Site '{site_name}' has status '{site_config.get('status', 'Ready')}'. Operations are only permitted on sites with 'Ready' status.", 400)
                 
             wp_path = site_config.get("wp_path")
             if not wp_path:
-                return jsonify({
-                    "success": False,
-                    "data": None,
-                    "error": f"WordPress path (wp_path) is not configured for site '{site_name}'. Please edit the site configuration first.",
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                }), 400
+                return err(f"WordPress path (wp_path) is not configured for site '{site_name}'. Please edit the site configuration first.", 400)
 
             task_id = start_task(
                 name=f"Check updates for {site_name}",
@@ -490,19 +389,9 @@ class UpdatesController:
             )
             if task_id is None:
                 return operation_in_progress_response(site_name)
-            return jsonify({
-                "success": True,
-                "data": {"task_id": task_id, "status": "running"},
-                "error": None,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            })
+            return ok({"task_id": task_id, "status": "running"})
         except Exception as e:
-            return jsonify({
-                "success": False,
-                "data": None,
-                "error": str(e),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }), 500
+            return err(str(e), 500)
 
     @staticmethod
     @require_api_key
@@ -510,12 +399,7 @@ class UpdatesController:
         try:
             sites = load_sites_config()
             if site_name not in sites:
-                return jsonify({
-                    "success": False,
-                    "data": None,
-                    "error": f"Site '{site_name}' not found",
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                }), 404
+                return err(f"Site '{site_name}' not found", 404)
 
             site_config = {**sites[site_name], "site_name": site_name}
             credentials = load_credentials()
@@ -524,21 +408,11 @@ class UpdatesController:
                 from src.git.manager import GitManager
                 git_mgr = GitManager(site_config, executor)
                 status = git_mgr.get_repo_status()
-                return jsonify({
-                    "success": True,
-                    "data": status,
-                    "error": None,
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                })
+                return ok(status)
             finally:
                 executor.disconnect()
         except Exception as e:
-            return jsonify({
-                "success": False,
-                "data": None,
-                "error": str(e),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }), 500
+            return err(str(e), 500)
 
     @staticmethod
     @require_api_key
@@ -546,21 +420,11 @@ class UpdatesController:
         try:
             sites = load_sites_config()
             if site_name not in sites:
-                return jsonify({
-                    "success": False,
-                    "data": None,
-                    "error": f"Site '{site_name}' not found",
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                }), 404
+                return err(f"Site '{site_name}' not found", 404)
 
             site_config = sites[site_name]
             if site_config.get("status") != "Ready":
-                return jsonify({
-                    "success": False,
-                    "data": None,
-                    "error": f"Site status is '{site_config.get('status')}', but must be 'Ready' to initialize Git.",
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                }), 400
+                return err(f"Site status is '{site_config.get('status')}', but must be 'Ready' to initialize Git.", 400)
 
             data = request.get_json(silent=True) or {}
             force = data.get("force", False)
@@ -575,19 +439,9 @@ class UpdatesController:
             if task_id is None:
                 return operation_in_progress_response(site_name)
 
-            return jsonify({
-                "success": True,
-                "data": {"task_id": task_id, "status": "running"},
-                "error": None,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            })
+            return ok({"task_id": task_id, "status": "running"})
         except Exception as e:
-            return jsonify({
-                "success": False,
-                "data": None,
-                "error": str(e),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }), 500
+            return err(str(e), 500)
 
     @staticmethod
     @require_api_key
@@ -595,21 +449,11 @@ class UpdatesController:
         try:
             sites = load_sites_config()
             if site_name not in sites:
-                return jsonify({
-                    "success": False,
-                    "data": None,
-                    "error": f"Site '{site_name}' not found",
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                }), 404
+                return err(f"Site '{site_name}' not found", 404)
 
             site_config = sites[site_name]
             if site_config.get("status") != "Ready":
-                return jsonify({
-                    "success": False,
-                    "data": None,
-                    "error": f"Site status is '{site_config.get('status')}', but must be 'Ready' to push Git repo.",
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                }), 400
+                return err(f"Site status is '{site_config.get('status')}', but must be 'Ready' to push Git repo.", 400)
 
             task_id = start_task(
                 name=f"Git push for {site_name}",
@@ -620,19 +464,9 @@ class UpdatesController:
             if task_id is None:
                 return operation_in_progress_response(site_name)
 
-            return jsonify({
-                "success": True,
-                "data": {"task_id": task_id, "status": "running"},
-                "error": None,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            })
+            return ok({"task_id": task_id, "status": "running"})
         except Exception as e:
-            return jsonify({
-                "success": False,
-                "data": None,
-                "error": str(e),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }), 500
+            return err(str(e), 500)
 
     @staticmethod
     @require_api_key
@@ -640,7 +474,7 @@ class UpdatesController:
         try:
             history_file = os.path.join(PROJECT_ROOT, "logs", "updates", f"{site_name}.jsonl")
             if not os.path.exists(history_file):
-                return jsonify({"success": True, "data": [], "error": None, "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+                return ok([])
                 
             history = []
             with open(history_file, "r", encoding="utf-8") as f:
@@ -649,10 +483,11 @@ class UpdatesController:
                         try:
                             history.append(json.loads(line.strip()))
                         except Exception:
+                            # Malformed history line; skip it, continue with others
                             pass
-            return jsonify({"success": True, "data": history, "error": None, "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+            return ok(history)
         except Exception as e:
-            return jsonify({"success": False, "data": None, "error": str(e), "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 500
+            return err(str(e), 500)
 
 # Route mappings (updates_bp registered with url_prefix="/api/sites" in app.py)
 updates_bp.add_url_rule("/<site_name>/updates", view_func=UpdatesController.get_updates, methods=["GET"])

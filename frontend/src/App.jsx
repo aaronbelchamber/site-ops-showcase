@@ -3,6 +3,8 @@ import api from "./services/api";
 import { showToast } from "./services/toast";
 import { useSitesContext } from "./context/SitesContext";
 import { useTaskPolling } from "./hooks/useTaskPolling";
+import { useConfirm } from "./hooks/useConfirm";
+import ErrorBoundary from "./components/ErrorBoundary";
 import ToastContainer from "./components/ToastContainer";
 import TopStatusContainer from "./components/TopStatusContainer";
 import AuthOverlay from "./components/AuthOverlay";
@@ -20,6 +22,7 @@ import { STALE_THRESHOLD_HOURS, isSiteStale, arePathsEqual } from "./utils/siteH
 export default function App() {
     const sitesContext = useSitesContext();
     const { pollTaskWithDelay } = useTaskPolling();
+    const { confirm, confirmDialog } = useConfirm();
     const staleCheckTimeoutsRef = useRef([]);
     const [isAuthenticated, setIsAuthenticated] = useState(api.hasToken());
     const [appMode, setAppMode] = useState("full");
@@ -253,7 +256,13 @@ export default function App() {
     };
 
     const handleDeleteProfile = async (profileId) => {
-        if (!confirm("Are you sure you want to delete this profile? Sites referencing it will lose their connection credentials.")) {
+        const ok = await confirm({
+            title: "Delete credential profile?",
+            message: "Sites referencing this profile will lose their connection credentials.",
+            confirmLabel: "Delete profile",
+            destructive: true,
+        });
+        if (!ok) {
             return;
         }
         try {
@@ -321,7 +330,13 @@ export default function App() {
     };
 
     const handleRestoreSystemBackup = async (filename) => {
-        if (!confirm(`WARNING: Restoring from backup "${filename}" will overwrite your current site configurations and credentials database. This may log you out or require re-login. Proceed?`)) {
+        const ok = await confirm({
+            title: "Restore configuration from backup?",
+            message: `This overwrites your current site configurations and credentials database with the contents of "${filename}". You may be logged out and need to sign in again.`,
+            confirmLabel: "Restore",
+            destructive: true,
+        });
+        if (!ok) {
             return;
         }
         setRestoringSystemBackup(true);
@@ -340,7 +355,13 @@ export default function App() {
     };
 
     const handleDeleteSystemBackup = async (filename) => {
-        if (!confirm(`Are you sure you want to delete backup file "${filename}"? This action is permanent.`)) {
+        const ok = await confirm({
+            title: "Delete backup file?",
+            message: `"${filename}" will be permanently removed. This cannot be undone.`,
+            confirmLabel: "Delete backup",
+            destructive: true,
+        });
+        if (!ok) {
             return;
         }
         try {
@@ -359,7 +380,13 @@ export default function App() {
             showToast("Only ZIP files are supported.", "error");
             return;
         }
-        if (!confirm("WARNING: Uploading and restoring a backup will overwrite current configuration files. Proceed?")) {
+        const ok = await confirm({
+            title: "Upload and restore configuration?",
+            message: "This overwrites your current configuration files with the contents of the uploaded archive.",
+            confirmLabel: "Upload and restore",
+            destructive: true,
+        });
+        if (!ok) {
             return;
         }
         setUploadingSystemBackup(true);
@@ -378,7 +405,14 @@ export default function App() {
     };
 
     const handlePurgeHealthData = async (siteName, displayName) => {
-        if (!confirm(`DANGER: Are you sure you want to purge all health history logs and screenshot files for site "${displayName}" (${siteName})? This will free up disk space but delete all historical health data. This cannot be undone.`)) {
+        const ok = await confirm({
+            title: "Purge all health data?",
+            message: `Every health history log and screenshot for "${displayName}" will be deleted. This frees disk space but cannot be undone.`,
+            requireTyped: siteName,
+            confirmLabel: "Purge health data",
+            destructive: true,
+        });
+        if (!ok) {
             return;
         }
         try {
@@ -427,7 +461,8 @@ export default function App() {
                     }
                 }
             } catch (err) {
-                console.debug("Stale check trigger failed for", siteName, err);
+                // 409 just means the backend is already working on this site.
+                console.debug("Stale check trigger skipped for", siteName, err);
                 if (sitesContext?.setSiteCheckInFlight) {
                     sitesContext.setSiteCheckInFlight(siteName, false);
                 }
@@ -448,7 +483,12 @@ export default function App() {
                 }
             }
 
-            if (isStale) {
+            // Don't re-queue a site whose check is already running: loadSites()
+            // is called on mount, after each completed task and on refresh, and
+            // re-triggering produced 409s against the backend's per-site lock.
+            const alreadyChecking = Boolean(sitesContext?.inFlightChecks?.has(siteName));
+
+            if (isStale && !alreadyChecking) {
                 // Stagger the trigger requests themselves (not just polling)
                 // so we don't fire many concurrent SSH/WP-CLI checks at once.
                 const timeoutId = setTimeout(() => runStaleCheck(siteName), staleIndex * 10000);
@@ -484,7 +524,7 @@ export default function App() {
             setSiteToEdit(null);
             setManageSitesTab("discovered");
             setCurrentView("manage-sites");
-        } else if (path === "/manage-sites/add" || path === "/site/add") {
+        } else if (path === "/manage-sites/add") {
             setSelectedSiteName(null);
             setSelectedHealthCheckId(null);
             setSiteToEdit(null);
@@ -624,6 +664,24 @@ export default function App() {
         }
     }, [currentView, activeAdminTab, isAuthenticated, logsLevelFilter]);
 
+    // Run a health check for one site on demand. Uses the async endpoint and
+    // polls the task, so it never blocks a request thread the way the old
+    // per-card auto-backfill did.
+    const handleRequestSiteCheck = async (siteName) => {
+        try {
+            const res = await api.triggerHealthCheckAsync(siteName);
+            if (res && res.task_id) {
+                pollTaskWithDelay(res.task_id, `Health check complete for ${siteName}`, (result) => {
+                    if (result) loadSites();
+                });
+            } else {
+                showToast(`Could not start health check for ${siteName}`, "error");
+            }
+        } catch (error) {
+            showToast(`Health check failed: ${error.message}`, "error");
+        }
+    };
+
     const handleBackToDashboard = () => {
         window.history.pushState({}, "", "/");
         window.dispatchEvent(new Event("popstate"));
@@ -635,8 +693,13 @@ export default function App() {
         loadAppMode();
     };
 
-    const handleLogout = () => {
-        if (confirm("Disconnect and clear API token?")) {
+    const handleLogout = async () => {
+        const ok = await confirm({
+            title: "Disconnect?",
+            message: "Your stored API token will be cleared from this browser.",
+            confirmLabel: "Disconnect",
+        });
+        if (ok) {
             api.clearToken();
             setIsAuthenticated(false);
             setSites([]);
@@ -754,6 +817,8 @@ export default function App() {
                 {isAuthenticated && (
                     <TopStatusContainer onActivityLogged={handleActivityLogged} />
                 )}
+                {/* Scoped per view: navigating to another view clears a caught error. */}
+                <ErrorBoundary key={`${currentView}:${selectedSiteName || ""}:${activeAdminTab}`}>
                 {isAuthenticated && currentView === "production-health" && (
                     <ProductionHealthDashboard />
                 )}
@@ -788,12 +853,6 @@ export default function App() {
                                         </button>
                                     ))}
                                 </div>
-                                <button type="button" className="md-button md-button-primary" onClick={() => {
-                                    window.history.pushState({}, "", "/site/add");
-                                    window.dispatchEvent(new Event("popstate"));
-                                }}>
-                                    <span className="material-symbols-outlined" aria-hidden="true">add</span> Add Site
-                                </button>
                                 <button type="button" className="md-button md-button-tonal" onClick={loadSites}>
                                     <span className="material-symbols-outlined" aria-hidden="true">refresh</span> Refresh
                                 </button>
@@ -825,9 +884,10 @@ export default function App() {
                                 window.dispatchEvent(new Event("popstate"));
                             }}
                             onAddSiteClick={() => {
-                                window.history.pushState({}, "", "/site/add");
+                                window.history.pushState({}, "", "/manage-sites/add");
                                 window.dispatchEvent(new Event("popstate"));
                             }}
+                            onRequestCheck={handleRequestSiteCheck}
                         />
                     </div>
                 )}
@@ -845,7 +905,7 @@ export default function App() {
                             window.dispatchEvent(new Event("popstate"));
                         }}
                         onCloneClick={(site) => {
-                            window.history.pushState({}, "", `/site/add?clone=${site.site_name}`);
+                            window.history.pushState({}, "", `/manage-sites/add?clone=${site.site_name}`);
                             window.dispatchEvent(new Event("popstate"));
                         }}
                     />
@@ -902,38 +962,48 @@ export default function App() {
                         </div>
 
                         {/* Tabs Navigation */}
-                        <div className="admin-tabs">
+                        <div className="md-tabs admin-tabs" role="tablist" aria-label="Admin sections">
                             <button
                                 type="button"
-                                className={`md-button admin-tab ${activeAdminTab === "profiles" ? "md-button-primary" : "md-button-tonal"}`}
+                                className={`md-tab ${activeAdminTab === "profiles" ? "active" : ""}`}
+                                role="tab"
+                                aria-selected={activeAdminTab === "profiles"}
                                 onClick={() => setActiveAdminTab("profiles")}
                             >
                                 <span className="material-symbols-outlined">key</span> Credential Profiles
                             </button>
                             <button
                                 type="button"
-                                className={`md-button admin-tab ${activeAdminTab === "logs" ? "md-button-primary" : "md-button-tonal"}`}
+                                className={`md-tab ${activeAdminTab === "logs" ? "active" : ""}`}
+                                role="tab"
+                                aria-selected={activeAdminTab === "logs"}
                                 onClick={() => setActiveAdminTab("logs")}
                             >
                                 <span className="material-symbols-outlined">terminal</span> Activity Logs
                             </button>
                             <button
                                 type="button"
-                                className={`md-button admin-tab ${activeAdminTab === "backups" ? "md-button-primary" : "md-button-tonal"}`}
+                                className={`md-tab ${activeAdminTab === "backups" ? "active" : ""}`}
+                                role="tab"
+                                aria-selected={activeAdminTab === "backups"}
                                 onClick={() => setActiveAdminTab("backups")}
                             >
                                 <span className="material-symbols-outlined">backup</span> Configuration Backups
                             </button>
                             <button
                                 type="button"
-                                className={`md-button admin-tab ${activeAdminTab === "notes" ? "md-button-primary" : "md-button-tonal"}`}
+                                className={`md-tab ${activeAdminTab === "notes" ? "active" : ""}`}
+                                role="tab"
+                                aria-selected={activeAdminTab === "notes"}
                                 onClick={() => setActiveAdminTab("notes")}
                             >
                                 <span className="material-symbols-outlined">description</span> Admin Notes
                             </button>
                             <button
                                 type="button"
-                                className={`md-button admin-tab ${activeAdminTab === "maintenance" ? "md-button-primary" : "md-button-tonal"}`}
+                                className={`md-tab ${activeAdminTab === "maintenance" ? "active" : ""}`}
+                                role="tab"
+                                aria-selected={activeAdminTab === "maintenance"}
                                 onClick={() => setActiveAdminTab("maintenance")}
                             >
                                 <span className="material-symbols-outlined">delete_sweep</span> Disk Maintenance
@@ -1042,17 +1112,17 @@ export default function App() {
                                             View recorded system activities, status updates, process start/end indicators, and backend system logs.
                                         </span>
                                     </div>
-                                    <div className="admin-log-toggle-group">
+                                    <div className="admin-log-toggle-group view-toggle-group" role="group" aria-label="Log source">
                                         <button 
                                             type="button"
-                                            className={`md-button ${logSourceTab === "activity" ? "md-button-primary" : "md-button-tonal"}`}
+                                            className={`md-button ${logSourceTab === "activity" ? "md-button-primary" : "md-button-outlined"}`}
                                             onClick={() => setLogSourceTab("activity")}
                                         >
                                             <span className="material-symbols-outlined">history</span> Activity History ({activityHistory.length})
                                         </button>
                                         <button 
                                             type="button"
-                                            className={`md-button ${logSourceTab === "system" ? "md-button-primary" : "md-button-tonal"}`}
+                                            className={`md-button ${logSourceTab === "system" ? "md-button-primary" : "md-button-outlined"}`}
                                             onClick={() => {
                                                 setLogSourceTab("system");
                                                 handleLoadLogs();
@@ -1144,8 +1214,14 @@ export default function App() {
                                                     <button
                                                         type="button"
                                                         className="md-button md-button-tonal md-button-destructive"
-                                                        onClick={() => {
-                                                            if (confirm("Clear all recorded local activity history?")) {
+                                                        onClick={async () => {
+                                                            const ok = await confirm({
+                                                                title: "Clear activity history?",
+                                                                message: "All locally recorded activity entries will be removed from this browser.",
+                                                                confirmLabel: "Clear history",
+                                                                destructive: true,
+                                                            });
+                                                            if (ok) {
                                                                 setActivityHistory([]);
                                                                 localStorage.removeItem("wp_mgr_activity_history");
                                                             }
@@ -1249,12 +1325,14 @@ export default function App() {
                         )}
                     </div>
                 )}
-
-
+                </ErrorBoundary>
             </main>
 
             {/* Alert Toasts Container */}
             <ToastContainer />
+
+            {/* Destructive-action confirmation */}
+            {confirmDialog}
         </div>
     );
 }

@@ -4,9 +4,11 @@ export default function ToastContainer() {
     const [toasts, setToasts] = useState([]);
 
     useEffect(() => {
+        const timers = new Set();
+
         const handleToast = (e) => {
             const { id, message, type, isProcess } = e.detail;
-            
+
             // Lower-right toasts are restricted ONLY to process starting or ending indicators
             if (!isProcess && type !== "process") {
                 return;
@@ -15,13 +17,20 @@ export default function ToastContainer() {
             setToasts((prev) => [...prev, { id, message, type }]);
 
             // Automatically remove toast after 4 seconds
-            setTimeout(() => {
+            const timer = setTimeout(() => {
+                timers.delete(timer);
                 setToasts((prev) => prev.filter((t) => t.id !== id));
             }, 4000);
+            timers.add(timer);
         };
 
         window.addEventListener("app-toast", handleToast);
-        return () => window.removeEventListener("app-toast", handleToast);
+        return () => {
+            window.removeEventListener("app-toast", handleToast);
+            // Otherwise a pending timer fires setState on an unmounted component.
+            timers.forEach(clearTimeout);
+            timers.clear();
+        };
     }, []);
 
     const getToastStyle = (type) => {

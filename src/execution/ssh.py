@@ -4,6 +4,7 @@ import socket
 import paramiko
 from typing import Dict, Any, Optional
 from src.execution.base import BaseExecutor, CommandResult
+from src.logging.logger import logger
 
 class SSHExecutor(BaseExecutor):
     def __init__(self, host: str, port: int, user: str, credentials: Dict[str, Any]):
@@ -14,6 +15,42 @@ class SSHExecutor(BaseExecutor):
         self.client: Optional[paramiko.SSHClient] = None
         self.connected = False
         
+
+    # Host keys are recorded on first connection and verified on every one
+    # after (trust on first use). Bare AutoAddPolicy without a known_hosts file
+    # accepted any key every time, so a machine-in-the-middle could take the
+    # session and collect the credentials being presented. With the store
+    # loaded, paramiko raises BadHostKeyException when a known host's key
+    # changes -- the signal that actually matters.
+    MANAGER_KNOWN_HOSTS = os.path.expanduser("~/.wp_site_manager/known_hosts")
+
+    @classmethod
+    def _configure_host_key_verification(cls, client: paramiko.SSHClient) -> None:
+        # Honour the operator's existing trusted hosts first.
+        try:
+            client.load_system_host_keys()
+        except Exception:
+            # System host keys may not exist; this is best-effort. Continue with manager's known_hosts.
+            pass
+
+        # Then the manager's own store, which is the one new keys are written
+        # to (load_host_keys sets the file paramiko saves back into).
+        try:
+            os.makedirs(os.path.dirname(cls.MANAGER_KNOWN_HOSTS), exist_ok=True)
+            if not os.path.exists(cls.MANAGER_KNOWN_HOSTS):
+                open(cls.MANAGER_KNOWN_HOSTS, "a").close()
+            client.load_host_keys(cls.MANAGER_KNOWN_HOSTS)
+        except Exception:
+            # File may be unreadable or corrupted; this is best-effort. Bare AutoAddPolicy will record new keys.
+            pass
+
+        # SSH_STRICT_HOST_KEYS=true refuses unknown hosts outright instead of
+        # recording them.
+        strict = os.getenv("SSH_STRICT_HOST_KEYS", "false").strip().lower() in ("1", "true", "yes")
+        client.set_missing_host_key_policy(
+            paramiko.RejectPolicy() if strict else paramiko.AutoAddPolicy()
+        )
+
     def _parse_private_key(self, key_string: str, password: Optional[str] = None) -> paramiko.PKey:
         """
         Attempt to parse a private key string using different key types.
@@ -44,7 +81,7 @@ class SSHExecutor(BaseExecutor):
                 self.disconnect()
 
         self.client = paramiko.SSHClient()
-        self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        self._configure_host_key_verification(self.client)
         
         pkey = None
         private_key_str = self.credentials.get("ssh_private_key")
@@ -60,14 +97,19 @@ class SSHExecutor(BaseExecutor):
                         with open(expanded_path, "r", encoding="utf-8", errors="ignore") as f:
                             private_key_str = f.read().strip()
                     except Exception as e:
-                        # Fallback / log failure to read file
-                        pass
+                        logger.warning(
+                            f"Could not read SSH private key file '{expanded_path}' for {self.host}: {e}. "
+                            f"Falling back to password/agent authentication."
+                        )
 
             try:
                 # We pass ssh_password as the passphrase to decrypt the key if encrypted
                 pkey = self._parse_private_key(private_key_str, password=ssh_password)
             except Exception as e:
-                # Log or handle key parsing failure
+                logger.warning(
+                    f"Could not parse the SSH private key for {self.host}: {e}. "
+                    f"Falling back to password/agent authentication."
+                )
                 pkey = None
 
         try:
@@ -252,6 +294,7 @@ class SSHExecutor(BaseExecutor):
                 try:
                     stdin.close()
                 except Exception:
+                    # Stream already closed or corrupted; best-effort cleanup. Command exit status still available.
                     pass
             
             exit_code = stdout.channel.recv_exit_status()
@@ -295,6 +338,7 @@ class SSHExecutor(BaseExecutor):
                 agent_active = True
                 agent_keys = [f"{k.get_name()}: {k.get_base64()[:16]}..." for k in keys]
         except Exception:
+            # SSH agent not running or inaccessible; optional info for diagnostics. Return empty list.
             pass
         return agent_active, agent_keys
 
@@ -319,6 +363,7 @@ class SSHExecutor(BaseExecutor):
                             "identity_file": lookup.get("identityfile", [""])[0] if isinstance(lookup.get("identityfile"), list) else lookup.get("identityfile", "")
                         })
             except Exception:
+                # SSH config format may be invalid or entries malformed; optional profile discovery. Return what parsed ok.
                 pass
         return profiles
 
@@ -330,6 +375,7 @@ class SSHExecutor(BaseExecutor):
             try:
                 self.client.close()
             except Exception:
+                # Connection already closed or corrupted; best-effort cleanup. Reset state regardless.
                 pass
             self.client = None
         self.connected = False

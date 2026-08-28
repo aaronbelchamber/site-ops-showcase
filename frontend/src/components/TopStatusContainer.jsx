@@ -5,7 +5,15 @@ export default function TopStatusContainer({ onActivityLogged }) {
     const [expandedIds, setExpandedIds] = useState(new Set());
     const [selectedDetail, setSelectedDetail] = useState(null);
 
+    // Errors and warnings stay until dismissed; routine success/info banners
+    // expire on their own. Previously every event was sticky, so loading a
+    // dashboard of N sites left a wall of "Health check complete for ..."
+    // banners above the content that had to be cleared by hand.
+    const AUTO_DISMISS_MS = 8000;
+
     useEffect(() => {
+        const timers = new Set();
+
         const handleStatusEvent = (e) => {
             const item = e.detail;
             if (!item || !item.message) return;
@@ -17,10 +25,23 @@ export default function TopStatusContainer({ onActivityLogged }) {
 
             // Add to top status list (latest on top)
             setStatusList((prev) => [item, ...prev.filter((i) => i.id !== item.id)]);
+
+            const isTransient = item.type === "success" || item.type === "info" || item.type === "process";
+            if (isTransient && !item.details) {
+                const timer = setTimeout(() => {
+                    timers.delete(timer);
+                    setStatusList((prev) => prev.filter((i) => i.id !== item.id));
+                }, AUTO_DISMISS_MS);
+                timers.add(timer);
+            }
         };
 
         window.addEventListener("app-toast", handleStatusEvent);
-        return () => window.removeEventListener("app-toast", handleStatusEvent);
+        return () => {
+            window.removeEventListener("app-toast", handleStatusEvent);
+            timers.forEach(clearTimeout);
+            timers.clear();
+        };
     }, [onActivityLogged]);
 
     const handleDismiss = (id) => {
@@ -116,9 +137,13 @@ export default function TopStatusContainer({ onActivityLogged }) {
             <div className="top-status-list">
                 {statusList.map((item) => {
                     const isExpanded = expandedIds.has(item.id);
-                    const isLong = (item.message && item.message.length > 120) || item.details;
-                    const displayMsg = isLong && !isExpanded 
-                        ? item.message.substring(0, 120) + "..." 
+                    // Truncation and expandability are separate: a short message
+                    // that carries details still needs a toggle, but must not be
+                    // rendered with a trailing ellipsis.
+                    const isTruncatable = Boolean(item.message && item.message.length > 120);
+                    const isExpandable = isTruncatable || Boolean(item.details);
+                    const displayMsg = isTruncatable && !isExpanded
+                        ? item.message.substring(0, 120) + "..."
                         : item.message;
 
                     return (
@@ -149,7 +174,7 @@ export default function TopStatusContainer({ onActivityLogged }) {
                                             </pre>
                                         )}
 
-                                        {isLong && (
+                                        {isExpandable && (
                                             <button
                                                 type="button"
                                                 onClick={() => toggleExpand(item.id)}

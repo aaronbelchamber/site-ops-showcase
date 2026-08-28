@@ -3,6 +3,49 @@
 // site's cached update-check summary, or null/undefined) explicitly rather
 // than closing over component state.
 
+// ---------------------------------------------------------------------------
+// One scale for update-check age.
+//
+// Three surfaces used to disagree about the same fact: the dashboard chip
+// counted a site stale after 24h, while the card dot stayed green for 7 days
+// and the component badges said "ok" alongside it. A site checked 30 hours ago
+// was simultaneously "Stale (>24h): 1" and green/"core ok", which made the
+// dashboard's own summary look wrong.
+//
+// Everything below derives from these thresholds, so the chip, the dot, the
+// badges and the tooltip always agree.
+// ---------------------------------------------------------------------------
+export const UPDATE_FRESH_HOURS = 24;   // fresh          -> stale
+export const UPDATE_STALE_DAYS = 7;     // stale          -> very stale
+export const UPDATE_VERY_STALE_DAYS = 30; // very stale   -> critical
+
+export const UPDATE_TIER = {
+    FRESH: "fresh",
+    STALE: "stale",
+    VERY_STALE: "very-stale",
+    CRITICAL: "critical",
+};
+
+export const getHoursSinceLastUpdateCheck = (updateInfo) => {
+    if (!updateInfo || !updateInfo.timestamp) return Infinity;
+    const checkDate = new Date(updateInfo.timestamp);
+    if (isNaN(checkDate.getTime())) return Infinity;
+    return Math.max(0, (Date.now() - checkDate.getTime()) / (1000 * 60 * 60));
+};
+
+/** Which tier an update-check age falls into. The single branch point. */
+export const getUpdateTier = (updateInfo) => {
+    const hours = getHoursSinceLastUpdateCheck(updateInfo);
+    if (hours === Infinity) return UPDATE_TIER.CRITICAL;
+    if (hours <= UPDATE_FRESH_HOURS) return UPDATE_TIER.FRESH;
+    if (hours <= UPDATE_STALE_DAYS * 24) return UPDATE_TIER.STALE;
+    if (hours <= UPDATE_VERY_STALE_DAYS * 24) return UPDATE_TIER.VERY_STALE;
+    return UPDATE_TIER.CRITICAL;
+};
+
+/** True when the dashboard chip should count this site. Matches "dot is not green". */
+export const isUpdateCheckStale = (updateInfo) => getUpdateTier(updateInfo) !== UPDATE_TIER.FRESH;
+
 export const getDaysSinceLastUpdateCheck = (updateInfo) => {
     if (!updateInfo || !updateInfo.timestamp) return Infinity;
     const checkDate = new Date(updateInfo.timestamp);
@@ -31,21 +74,48 @@ export const getUpdateStalenessTooltip = (updateInfo) => {
     const formattedDate = new Date(updateInfo.timestamp).toLocaleDateString(undefined, {
         month: 'short', day: 'numeric', year: 'numeric'
     });
-    if (daysSinceCheck <= 7) {
-        return `Last update check: ${formattedDate} (${daysSinceCheck === 0 ? 'today' : daysSinceCheck + 'd ago'}) - Fresh`;
+    const age = daysSinceCheck === 0 ? 'today' : `${daysSinceCheck}d ago`;
+    const tier = getUpdateTier(updateInfo);
+    if (tier === UPDATE_TIER.FRESH) {
+        return `Last update check: ${formattedDate} (${age}) - Fresh`;
     }
-    if (daysSinceCheck <= 30) {
-        return `Last update check: ${formattedDate} (${daysSinceCheck}d ago) - Stale (>7 days)`;
+    if (tier === UPDATE_TIER.STALE) {
+        return `Last update check: ${formattedDate} (${age}) - Stale (>${UPDATE_FRESH_HOURS} hours)`;
     }
-    return `Last update check: ${formattedDate} (${daysSinceCheck}d ago) - Very Stale (>30 days)`;
+    if (tier === UPDATE_TIER.VERY_STALE) {
+        return `Last update check: ${formattedDate} (${age}) - Stale (>${UPDATE_STALE_DAYS} days)`;
+    }
+    return `Last update check: ${formattedDate} (${age}) - Very Stale (>${UPDATE_VERY_STALE_DAYS} days)`;
 };
 
-export const getStatusDotClass = (updateInfo) => {
-    const daysSinceCheck = getDaysSinceLastUpdateCheck(updateInfo);
-    if (daysSinceCheck <= 7) return "status-circle-green";
-    if (daysSinceCheck <= 30) return "status-circle-yellow";
-    return "status-circle-orange";
+const UPDATE_TIER_DOT = {
+    [UPDATE_TIER.FRESH]: "status-circle-green",
+    [UPDATE_TIER.STALE]: "status-circle-yellow",
+    [UPDATE_TIER.VERY_STALE]: "status-circle-orange",
+    [UPDATE_TIER.CRITICAL]: "status-circle-red",
 };
+
+export const getStatusDotClass = (updateInfo) => UPDATE_TIER_DOT[getUpdateTier(updateInfo)];
+
+/** Badge colour for a per-component (core/plugins/themes) staleness chip. */
+const UPDATE_TIER_BADGE = {
+    [UPDATE_TIER.FRESH]: "badge-success",
+    [UPDATE_TIER.STALE]: "badge-stale-yellow",
+    [UPDATE_TIER.VERY_STALE]: "badge-stale-orange",
+    [UPDATE_TIER.CRITICAL]: "badge-error",
+};
+
+export const getUpdateTierBadgeClass = (updateInfo) => UPDATE_TIER_BADGE[getUpdateTier(updateInfo)];
+
+/** Short suffix describing the tier, e.g. "stale (>7d)". */
+const UPDATE_TIER_SUFFIX = {
+    [UPDATE_TIER.FRESH]: "ok",
+    [UPDATE_TIER.STALE]: `stale (>${UPDATE_FRESH_HOURS}h)`,
+    [UPDATE_TIER.VERY_STALE]: `stale (>${UPDATE_STALE_DAYS}d)`,
+    [UPDATE_TIER.CRITICAL]: `stale (>${UPDATE_VERY_STALE_DAYS}d)`,
+};
+
+export const getUpdateTierSuffix = (updateInfo) => UPDATE_TIER_SUFFIX[getUpdateTier(updateInfo)];
 
 // Health-check staleness (Production Health dashboard): a separate, shorter
 // scale from the update-check staleness above, since a stale health check
@@ -102,6 +172,11 @@ export const getHealthBadgeClass = (status) => {
             return "badge badge-warning";
         case "archived":
         case "neutral":
+        // "not checked" is an absence of data, not a failure -- it used to fall
+        // through to the default and render as a red error badge.
+        case "not checked":
+        case "unknown":
+        case "":
             return "badge badge-neutral";
         case "error":
         case "failed":

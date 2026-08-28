@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import api from "../services/api";
 import { showToast } from "../services/toast";
 import { useTaskPolling } from "../hooks/useTaskPolling";
+import { useConfirm } from "../hooks/useConfirm";
 import { useSitesContext } from "../context/SitesContext";
 
 import UserManagementTab from "./UserManagementTab";
@@ -10,6 +11,7 @@ import ImageLightbox from "./ImageLightbox";
 
 export default function SiteDetails({ siteName, onBack, onEditClick, onCloneClick }) {
     const sitesContext = useSitesContext();
+    const { confirm, confirmDialog } = useConfirm();
     const [site, setSite] = useState(null);
     const [activeTab, setActiveTab] = useState(() => new URLSearchParams(window.location.search).get("tab") || "overview");
 
@@ -50,7 +52,11 @@ export default function SiteDetails({ siteName, onBack, onEditClick, onCloneClic
 
     const [loadingDetails, setLoadingDetails] = useState(true);
     const [loadingBackups, setLoadingBackups] = useState(false);
-    const [loadingHealth, setLoadingHealth] = useState(false);
+    // Separate flags: fetchHealthHistory and fetchLatestSnapshot run
+    // concurrently, and a shared flag let the first to finish clear the
+    // spinner for the section that was still loading.
+    const [loadingHistory, setLoadingHistory] = useState(false);
+    const [loadingSnapshot, setLoadingSnapshot] = useState(false);
     const [checkingUpdates, setCheckingUpdates] = useState(false);
     const [loadingUpdatesHistory, setLoadingUpdatesHistory] = useState(false);
     const [visibleUpdatesCount, setVisibleUpdatesCount] = useState(5);
@@ -61,6 +67,17 @@ export default function SiteDetails({ siteName, onBack, onEditClick, onCloneClic
         task.name && task.name.includes(siteName)
     );
     const hasRunningTask = siteTasks.some(task => task.status === "running");
+
+    // Re-reads just the site record. Used after actions that only mutate the
+    // site config (e.g. a vulnerability scan) so we don't re-run every fetch.
+    const refreshSite = async () => {
+        try {
+            const siteData = await api.getSite(siteName);
+            setSite(siteData);
+        } catch (error) {
+            console.error("Failed to refresh site:", error);
+        }
+    };
 
     const fetchBackups = async () => {
         setLoadingBackups(true);
@@ -75,14 +92,14 @@ export default function SiteDetails({ siteName, onBack, onEditClick, onCloneClic
     };
 
     const fetchHealthHistory = async () => {
-        setLoadingHealth(true);
+        setLoadingHistory(true);
         try {
             const data = await api.getHealthHistory(siteName);
             setHealthHistory(data);
         } catch (error) {
             console.error("Failed to load health history:", error);
         } finally {
-            setLoadingHealth(false);
+            setLoadingHistory(false);
         }
     };
 
@@ -134,7 +151,7 @@ export default function SiteDetails({ siteName, onBack, onEditClick, onCloneClic
     };
 
     const fetchLatestSnapshot = async () => {
-        setLoadingHealth(true);
+        setLoadingSnapshot(true);
         try {
             let data = await api.getLatestSnapshot(siteName);
             let hasScreenshot = data && data.id && (data.checks?.http?.screenshots?.desktop || data.checks?.http?.screenshots);
@@ -171,7 +188,7 @@ export default function SiteDetails({ siteName, onBack, onEditClick, onCloneClic
         } catch (error) {
             console.error("Failed to fetch latest snapshot:", error);
         } finally {
-            setLoadingHealth(false);
+            setLoadingSnapshot(false);
         }
     };
 
@@ -410,7 +427,13 @@ export default function SiteDetails({ siteName, onBack, onEditClick, onCloneClic
     };
 
     const handleRestoreBackup = async (backupId) => {
-        if (!confirm(`Are you sure you want to restore backup '${backupId}'? Current site state will be overwritten.`)) {
+        const ok = await confirm({
+            title: "Restore this backup?",
+            message: `The current state of ${site.display_name} will be overwritten with backup "${backupId}".`,
+            confirmLabel: "Restore",
+            destructive: true,
+        });
+        if (!ok) {
             return;
         }
 
@@ -426,7 +449,13 @@ export default function SiteDetails({ siteName, onBack, onEditClick, onCloneClic
     };
 
     const handleDeleteBackup = async (backupId) => {
-        if (!confirm(`Are you sure you want to delete backup '${backupId}'?`)) {
+        const ok = await confirm({
+            title: "Delete this backup?",
+            message: `Backup "${backupId}" will be permanently removed.`,
+            confirmLabel: "Delete backup",
+            destructive: true,
+        });
+        if (!ok) {
             return;
         }
 
@@ -441,10 +470,15 @@ export default function SiteDetails({ siteName, onBack, onEditClick, onCloneClic
 
     // Updates actions using decoupled createBackup & qualityChecks
     const handleUpdateCore = async () => {
-        const confirmMsg = (!createBackup && !qualityChecks)
-            ? "WARNING: Both Pre-Update Backup and Quality Checks are disabled.\n\nProceed with direct WordPress Core Update?"
-            : "Proceed with WordPress Core Update?";
-        if (!confirm(confirmMsg)) {
+        const ok = await confirm({
+            title: "Update core?",
+            message: (!createBackup && !qualityChecks)
+                ? "Pre-update backup and quality checks are both disabled, so a failed update cannot be rolled back automatically. Proceed with updating WordPress core?"
+                : "Proceed with updating WordPress core?",
+            confirmLabel: "Update core",
+            destructive: !createBackup && !qualityChecks,
+        });
+        if (!ok) {
             return;
         }
 
@@ -462,10 +496,15 @@ export default function SiteDetails({ siteName, onBack, onEditClick, onCloneClic
     };
 
     const handleUpdatePlugins = async () => {
-        const confirmMsg = (!createBackup && !qualityChecks)
-            ? "WARNING: Both Pre-Update Backup and Quality Checks are disabled.\n\nProceed to update all available plugins?"
-            : "Proceed to update all available plugins?";
-        if (!confirm(confirmMsg)) {
+        const ok = await confirm({
+            title: "Update plugins?",
+            message: (!createBackup && !qualityChecks)
+                ? "Pre-update backup and quality checks are both disabled, so a failed update cannot be rolled back automatically. Proceed with updating all available plugins?"
+                : "Proceed with updating all available plugins?",
+            confirmLabel: "Update plugins",
+            destructive: !createBackup && !qualityChecks,
+        });
+        if (!ok) {
             return;
         }
 
@@ -483,10 +522,15 @@ export default function SiteDetails({ siteName, onBack, onEditClick, onCloneClic
     };
 
     const handleUpdateThemes = async () => {
-        const confirmMsg = (!createBackup && !qualityChecks)
-            ? "WARNING: Both Pre-Update Backup and Quality Checks are disabled.\n\nProceed to update all available themes?"
-            : "Proceed to update all available themes?";
-        if (!confirm(confirmMsg)) {
+        const ok = await confirm({
+            title: "Update themes?",
+            message: (!createBackup && !qualityChecks)
+                ? "Pre-update backup and quality checks are both disabled, so a failed update cannot be rolled back automatically. Proceed with updating all available themes?"
+                : "Proceed with updating all available themes?",
+            confirmLabel: "Update themes",
+            destructive: !createBackup && !qualityChecks,
+        });
+        if (!ok) {
             return;
         }
 
@@ -504,10 +548,15 @@ export default function SiteDetails({ siteName, onBack, onEditClick, onCloneClic
     };
 
     const handleUpdateAll = async () => {
-        const confirmMsg = (!createBackup && !qualityChecks)
-            ? "WARNING: Both Pre-Update Backup and Quality Checks are disabled.\n\nProceed with updating all components (Plugins, Themes, and WordPress Core)?"
-            : "Proceed with updating all components (Plugins, Themes, and WordPress Core)?";
-        if (!confirm(confirmMsg)) {
+        const ok = await confirm({
+            title: "Update all?",
+            message: (!createBackup && !qualityChecks)
+                ? "Pre-update backup and quality checks are both disabled, so a failed update cannot be rolled back automatically. Proceed with updating plugins, themes and WordPress core?"
+                : "Proceed with updating plugins, themes and WordPress core?",
+            confirmLabel: "Update all",
+            destructive: !createBackup && !qualityChecks,
+        });
+        if (!ok) {
             return;
         }
 
@@ -609,15 +658,19 @@ export default function SiteDetails({ siteName, onBack, onEditClick, onCloneClic
             </div>
 
             {/* Tab Navigation */}
-            <div className="md-tabs" style={{ marginBottom: "1.5rem" }}>
+            <div className="md-tabs" role="tablist" aria-label="Site sections" style={{ marginBottom: "1.5rem" }}>
                 <button
                     className={`md-tab ${activeTab === "overview" ? "active" : ""}`}
+                    role="tab"
+                    aria-selected={activeTab === "overview"}
                     onClick={() => handleTabChange("overview")}
                 >
                     <span className="material-symbols-outlined">dashboard</span> Overview
                 </button>
                 <button
                     className={`md-tab ${activeTab === "updates" ? "active" : ""}`}
+                    role="tab"
+                    aria-selected={activeTab === "updates"}
                     onClick={() => handleTabChange("updates")}
                 >
                     <span className="material-symbols-outlined">update</span> Updates
@@ -627,6 +680,8 @@ export default function SiteDetails({ siteName, onBack, onEditClick, onCloneClic
                 </button>
                 <button
                     className={`md-tab ${activeTab === "backups" ? "active" : ""}`}
+                    role="tab"
+                    aria-selected={activeTab === "backups"}
                     onClick={() => handleTabChange("backups")}
                 >
                     <span className="material-symbols-outlined">backup</span> Backups ({backups.length})
@@ -634,6 +689,8 @@ export default function SiteDetails({ siteName, onBack, onEditClick, onCloneClic
 
                 <button
                     className={`md-tab ${activeTab === "users" ? "active" : ""}`}
+                    role="tab"
+                    aria-selected={activeTab === "users"}
                     onClick={() => handleTabChange("users")}
                 >
                     <span className="material-symbols-outlined">group</span> User Management
@@ -641,6 +698,8 @@ export default function SiteDetails({ siteName, onBack, onEditClick, onCloneClic
 
                 <button
                     className={`md-tab ${activeTab === "security" ? "active" : ""}`}
+                    role="tab"
+                    aria-selected={activeTab === "security"}
                     onClick={() => handleTabChange("security")}
                 >
                     <span className="material-symbols-outlined">security</span> Security Audit
@@ -661,9 +720,9 @@ export default function SiteDetails({ siteName, onBack, onEditClick, onCloneClic
 
             {/* TAB CONTENTS */}
             {activeTab === "overview" && (
-                <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: "1.5rem" }}>
+                <div className="split-2-1">
                     {/* Left Column: Quick Info & Status */}
-                    <div style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
+                    <div className="stack-column">
                         <div className="md-card">
                             <div className="card-header">
                                 <h3>Site Configuration</h3>
@@ -779,7 +838,7 @@ export default function SiteDetails({ siteName, onBack, onEditClick, onCloneClic
                             <div className="card-header">
                                 <h3>Recent Health Checks</h3>
                             </div>
-                            {loadingHealth ? (
+                            {loadingHistory ? (
                                 <p style={{ marginTop: "1rem", color: "var(--md-sys-color-outline)" }}>Loading history...</p>
                             ) : healthHistory.length === 0 ? (
                                 <p style={{ marginTop: "1rem", color: "var(--md-sys-color-outline)" }}>No health checks recorded yet.</p>
@@ -804,7 +863,7 @@ export default function SiteDetails({ siteName, onBack, onEditClick, onCloneClic
                                             title="Click to view detailed health report"
                                         >
                                             <div>
-                                                <strong>{check.overall_status.toUpperCase()}</strong>
+                                                <strong>{(check.overall_status || "unknown").toUpperCase()}</strong>
                                                 <div style={{ fontSize: "0.8rem", color: "var(--md-sys-color-outline)" }}>
                                                     {new Date(check.timestamp).toLocaleString()}
                                                 </div>
@@ -827,7 +886,7 @@ export default function SiteDetails({ siteName, onBack, onEditClick, onCloneClic
                                 <h3>Latest Live Snapshot</h3>
                                 <button
                                     className="md-button md-button-tonal md-button-sm"
-                                    disabled={loadingHealth}
+                                    disabled={loadingSnapshot}
                                     onClick={() => fetchLatestSnapshot()}
                                     title="Re-run live health check and capture fresh desktop/mobile screenshots"
                                 >
@@ -1238,8 +1297,10 @@ export default function SiteDetails({ siteName, onBack, onEditClick, onCloneClic
             )}
 
             {activeTab === "security" && (
-                <SecurityScanTab siteName={siteName} />
+                <SecurityScanTab site={site} onScanComplete={refreshSite} />
             )}
+
+            {confirmDialog}
 
             {lightboxImage && (
                 <ImageLightbox

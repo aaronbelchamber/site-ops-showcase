@@ -4,7 +4,30 @@ import zipfile
 import time
 from pathlib import Path
 from typing import List, Dict, Any, Optional
-from src.config.loader import SITES_YAML_PATH, ADMIN_DATA_JSON_PATH, CREDENTIALS_ENC_PATH, ENV_PATH, ADMIN_NOTES_TXT_PATH
+from src.config.loader import SITES_YAML_PATH, ADMIN_DATA_JSON_PATH, CREDENTIALS_ENC_PATH, ADMIN_NOTES_TXT_PATH
+
+_BACKUP_README = """WordPress Site Manager - configuration backup
+=============================================
+
+This archive contains:
+  sites.yaml        site definitions (local)
+  admin_data.json   site definitions (versioned)
+  admin_notes.txt   operator notes
+  credentials.enc   SSH passwords / private keys, ENCRYPTED
+
+It deliberately does NOT contain config/.env.
+
+.env holds ENCRYPTION_KEY, which is the passphrase for credentials.enc. Shipping
+both in one archive would mean anyone holding this file could decrypt every
+stored SSH credential, so the key is excluded and the archive is only as
+sensitive as the encryption protecting it.
+
+To restore onto a new machine you need BOTH this archive and the original
+ENCRYPTION_KEY. Back that key up separately, in a password manager or secret
+store -- without it, credentials.enc cannot be decrypted.
+
+Restoring this archive does not modify .env on the target install.
+"""
 
 class SystemBackupManager:
     @classmethod
@@ -62,12 +85,11 @@ class SystemBackupManager:
                 zip_file.write(SITES_YAML_PATH, "sites.yaml")
             if os.path.exists(ADMIN_DATA_JSON_PATH):
                 zip_file.write(ADMIN_DATA_JSON_PATH, "admin_data.json")
-            if os.path.exists(ENV_PATH):
-                zip_file.write(ENV_PATH, ".env")
             if os.path.exists(CREDENTIALS_ENC_PATH):
                 zip_file.write(CREDENTIALS_ENC_PATH, "credentials.enc")
             if os.path.exists(ADMIN_NOTES_TXT_PATH):
                 zip_file.write(ADMIN_NOTES_TXT_PATH, "admin_notes.txt")
+            zip_file.writestr("README.txt", _BACKUP_README)
 
         # Sync to Google Drive if configured
         gdrive_dir = cls.get_gdrive_dir()
@@ -76,7 +98,8 @@ class SystemBackupManager:
                 gdrive_target = gdrive_dir / zip_filename
                 shutil.copy2(zip_file_path, gdrive_target)
             except Exception as sync_err:
-                pass  # Local backup remains intact even if cloud sync fails
+                # Google Drive sync is best-effort. Local backup remains in backups/system regardless.
+                pass
 
         return str(zip_file_path)
 
@@ -122,10 +145,13 @@ class SystemBackupManager:
             with zipfile.ZipFile(zip_file_path, 'r') as zip_file:
                 zip_file.extractall(temporary_extraction_directory)
 
-            # Define temporary file locations
+            # Define temporary file locations. `.env` is deliberately absent:
+            # restoring it would overwrite API_TOKEN / ENCRYPTION_KEY on this
+            # install (locking the operator out, or silently orphaning
+            # credentials.enc). Legacy archives may still contain one; it is
+            # extracted to the temp dir and discarded with it.
             temp_yaml = temporary_extraction_directory / "sites.yaml"
             temp_json = temporary_extraction_directory / "admin_data.json"
-            temp_env = temporary_extraction_directory / ".env"
             temp_enc = temporary_extraction_directory / "credentials.enc"
             temp_notes = temporary_extraction_directory / "admin_notes.txt"
 
@@ -134,8 +160,6 @@ class SystemBackupManager:
                 shutil.copy2(SITES_YAML_PATH, SITES_YAML_PATH + ".bak")
             if os.path.exists(ADMIN_DATA_JSON_PATH):
                 shutil.copy2(ADMIN_DATA_JSON_PATH, ADMIN_DATA_JSON_PATH + ".bak")
-            if os.path.exists(ENV_PATH):
-                shutil.copy2(ENV_PATH, ENV_PATH + ".bak")
             if os.path.exists(CREDENTIALS_ENC_PATH):
                 shutil.copy2(CREDENTIALS_ENC_PATH, CREDENTIALS_ENC_PATH + ".bak")
             if os.path.exists(ADMIN_NOTES_TXT_PATH):
@@ -149,10 +173,6 @@ class SystemBackupManager:
             if temp_json.exists():
                 os.makedirs(os.path.dirname(ADMIN_DATA_JSON_PATH), exist_ok=True)
                 shutil.copy2(temp_json, ADMIN_DATA_JSON_PATH)
-            # Restore .env
-            if temp_env.exists():
-                os.makedirs(os.path.dirname(ENV_PATH), exist_ok=True)
-                shutil.copy2(temp_env, ENV_PATH)
             # Restore credentials.enc
             if temp_enc.exists():
                 os.makedirs(os.path.dirname(CREDENTIALS_ENC_PATH), exist_ok=True)

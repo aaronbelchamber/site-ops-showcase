@@ -1,8 +1,10 @@
 import unittest
 from unittest.mock import patch, MagicMock
+import io
 import json
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -66,6 +68,39 @@ class TestWebAPI(unittest.TestCase):
         self.assertEqual(response.headers.get("Access-Control-Allow-Origin"), "*")
 
     @patch("src.api.routes.sites.load_sites_config")
+    def test_get_sites_attaches_health_summary_from_snapshot(self, mock_load_config):
+        mock_load_config.return_value = {
+            "site-slug": {
+                "display_name": "Test",
+                "ssh_host": "localhost",
+                "wp_path": "/var/www/html",
+                "health_check_url": "http://example.com",
+                "site_name": "site-slug"
+            }
+        }
+        from src.api.routes import sites as sites_module
+        with patch.object(sites_module, "PROJECT_ROOT", self.temp_dir):
+            health_dir = os.path.join(self.temp_dir, "logs", "health")
+            os.makedirs(health_dir, exist_ok=True)
+            snapshot_path = os.path.join(health_dir, "last_snapshot_site-slug.json")
+            with open(snapshot_path, "w", encoding="utf-8") as f:
+                json.dump({
+                    "id": "chk1",
+                    "timestamp": "2026-08-25T00:00:00Z",
+                    "overall_status": "healthy",
+                    "checks": {"http": {"console_errors": [], "error_summary": {}}}
+                }, f)
+            sites_module._health_snapshot_cache.clear()
+
+            headers = {"Authorization": f"Bearer {self.api_token}"}
+            response = self.client.get("/api/sites", headers=headers)
+
+        data = json.loads(response.data)
+        summary = data["data"][0]["health_summary"]
+        self.assertEqual(summary["id"], "chk1")
+        self.assertEqual(summary["overall_status"], "healthy")
+
+    @patch("src.api.routes.sites.load_sites_config")
     @patch("src.api.routes.sites.load_credentials")
     @patch("src.api.routes.sites.save_sites_config")
     @patch("src.api.routes.sites.save_credentials")
@@ -120,23 +155,11 @@ class TestWebAPI(unittest.TestCase):
             self.assertIn(task_data["data"]["status"], ["running", "completed"])
 
     @patch("src.api.routes.sites.load_raw_credentials")
-    @patch("src.api.routes.sites.load_raw_sites_config")
     @patch("src.api.routes.sites.load_sites_config")
     @patch("src.api.routes.sites.save_sites_config")
     @patch("src.api.routes.sites.save_credentials")
-    def test_clone_site_success(self, mock_save_creds, mock_save_config, mock_load_config, mock_load_raw_config, mock_load_raw_creds):
+    def test_clone_site_success(self, mock_save_creds, mock_save_config, mock_load_config, mock_load_raw_creds):
         mock_load_config.return_value = {
-            "source-site": {
-                "site_name": "source-site",
-                "display_name": "Source Site",
-                "ssh_host": "localhost",
-                "wp_path": "/var/www/source",
-                "db_name": "source_db",
-                "db_user": "source_user",
-                "health_check_url": "http://source.com"
-            }
-        }
-        mock_load_raw_config.return_value = {
             "source-site": {
                 "site_name": "source-site",
                 "display_name": "Source Site",
@@ -213,6 +236,8 @@ class TestWebAPI(unittest.TestCase):
         self.assertTrue(data2["success"])
         self.assertTrue(data2["cached"])
         self.assertEqual(data2["data"], data1["data"])
+
+        mock_executor.return_value.disconnect.assert_called_once()
 
     @patch("src.api.routes.updates.load_sites_config")
     @patch("src.api.routes.updates.load_credentials")
@@ -322,8 +347,346 @@ class TestWebAPI(unittest.TestCase):
         self.assertFalse(data["success"])
         self.assertIn("wp_path", data["error"])
 
+
+class TestHealthSnapshotCache(unittest.TestCase):
+    """
+    _read_json_cached backs the health_summary GET /api/sites attaches to every
+    site on every poll -- it must skip re-reading a file that hasn't changed,
+    and must pick up a file that has.
+    """
+
+    def setUp(self):
+        import tempfile
+        from src.api.routes import sites as sites_module
+        self.sites_module = sites_module
+        self.temp_dir = tempfile.mkdtemp()
+        self.path = os.path.join(self.temp_dir, "snapshot.json")
+        self.sites_module._health_snapshot_cache.clear()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _write(self, data):
+        with open(self.path, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+
+    def test_unchanged_file_is_read_from_disk_only_once(self):
+        self._write({"id": "chk1"})
+        first = self.sites_module._read_json_cached(self.path)
+        with patch("builtins.open") as mock_open:
+            second = self.sites_module._read_json_cached(self.path)
+        mock_open.assert_not_called()
+        self.assertEqual(first, second)
+        self.assertEqual(second, {"id": "chk1"})
+
+    def test_changed_file_invalidates_the_cache(self):
+        # Different length ensures the (mtime, size) stamp changes deterministically,
+        # rather than relying on filesystem mtime resolution between fast writes.
+        self._write({"id": "chk1"})
+        first = self.sites_module._read_json_cached(self.path)
+
+        self._write({"id": "chk2-updated"})
+        second = self.sites_module._read_json_cached(self.path)
+
+        self.assertEqual(first["id"], "chk1")
+        self.assertEqual(second["id"], "chk2-updated")
+
+    def test_missing_file_returns_none(self):
+        result = self.sites_module._read_json_cached(os.path.join(self.temp_dir, "does-not-exist.json"))
+        self.assertIsNone(result)
+
+
 if __name__ == "__main__":
     unittest.main()
 
 
 
+
+
+class TestSPAFallbackRouting(unittest.TestCase):
+    """
+    Client-side routes must survive a deep link or refresh in production.
+
+    A hand-maintained list of @app.route entries had drifted from the frontend
+    router (/manage-sites and its sub-routes were never added), so those paths
+    returned a JSON 404 instead of the app. The 404 handler now serves the SPA,
+    which means new client routes need no server change.
+    """
+
+    def setUp(self):
+        self.app = create_app()
+        self.client = self.app.test_client()
+        self.html = {"Accept": "text/html"}
+
+    def _serves_spa(self, path):
+        return self.client.get(path, headers=self.html).status_code == 200
+
+    def test_previously_broken_manage_sites_routes_serve_the_app(self):
+        for path in ("/manage-sites", "/manage-sites/discovered",
+                     "/manage-sites/add", "/manage-sites/configured"):
+            with self.subTest(path=path):
+                self.assertTrue(self._serves_spa(path), f"{path} should serve index.html")
+
+    def test_existing_routes_still_serve_the_app(self):
+        for path in ("/", "/admin", "/logs", "/profiles", "/production-health",
+                     "/site/add", "/site/demo/edit", "/site/demo/details",
+                     "/site/demo/health-check/abc123"):
+            with self.subTest(path=path):
+                self.assertTrue(self._serves_spa(path), f"{path} should serve index.html")
+
+    def test_a_client_route_invented_later_also_works(self):
+        # The point of the change: no server edit needed for a new client route.
+        self.assertTrue(self._serves_spa("/some/future/client/route"))
+
+    def test_unknown_api_paths_still_return_json_404(self):
+        resp = self.client.get("/api/does-not-exist", headers=self.html)
+        self.assertEqual(resp.status_code, 404)
+        self.assertEqual(resp.mimetype, "application/json")
+        self.assertFalse(json.loads(resp.data)["success"])
+
+    def test_missing_assets_still_404_rather_than_returning_html(self):
+        # Returning index.html for a missing bundle would hide a build failure.
+        for path in ("/assets/index-abc123.js", "/assets/style.css", "/favicon.ico"):
+            with self.subTest(path=path):
+                self.assertEqual(self.client.get(path, headers=self.html).status_code, 404)
+
+
+class TestSynchronousOperationLocking(unittest.TestCase):
+    """
+    Endpoints that do live work inline (health check, forced update scan) must
+    take the same per-site lock as the background tasks, otherwise the dashboard
+    can stack concurrent SSH sessions and browser launches on one site.
+    """
+
+    def setUp(self):
+        from src.api.tasks import _manager
+        self.manager = _manager
+        self.app = create_app()
+        self.client = self.app.test_client()
+        self.api_token = "test-token"
+        self.env_patcher = patch.dict(os.environ, {"API_TOKEN": self.api_token})
+        self.env_patcher.start()
+        self.auth = {"Authorization": f"Bearer {self.api_token}"}
+        self.site = {"demo": {"site_name": "demo", "status": "Ready", "display_name": "Demo",
+                              "wp_path": "/var/www/html", "health_check_url": "https://example.com"}}
+
+    def tearDown(self):
+        self.env_patcher.stop()
+
+    def test_sync_health_check_is_refused_while_site_is_busy(self):
+        with patch("src.api.routes.health.load_sites_config", return_value=self.site):
+            with self.manager.site_operation("demo") as acquired:
+                self.assertTrue(acquired)
+                resp = self.client.get("/api/sites/demo/health", headers=self.auth)
+        self.assertEqual(resp.status_code, 409)
+        self.assertIn("already in progress", json.loads(resp.data)["error"])
+
+    def test_sync_health_check_releases_the_lock_afterwards(self):
+        with patch("src.api.routes.health.load_sites_config", return_value=self.site), \
+             patch("src.api.routes.health.HealthTaskRunner.run_health_check_task",
+                   return_value={"id": "chk1", "overall_status": "healthy"}):
+            first = self.client.get("/api/sites/demo/health", headers=self.auth)
+            second = self.client.get("/api/sites/demo/health", headers=self.auth)
+        self.assertEqual(first.status_code, 200)
+        # A second call must succeed, i.e. the lock was not leaked.
+        self.assertEqual(second.status_code, 200)
+
+    def test_sync_forced_update_scan_is_refused_while_site_is_busy(self):
+        with patch("src.api.routes.updates.load_sites_config", return_value=self.site):
+            with self.manager.site_operation("demo") as acquired:
+                self.assertTrue(acquired)
+                resp = self.client.get("/api/sites/demo/updates?force=true", headers=self.auth)
+        self.assertEqual(resp.status_code, 409)
+
+    def test_lock_is_released_even_when_the_operation_raises(self):
+        with patch("src.api.routes.health.load_sites_config", return_value=self.site), \
+             patch("src.api.routes.health.HealthTaskRunner.run_health_check_task",
+                   side_effect=RuntimeError("boom")):
+            self.client.get("/api/sites/demo/health", headers=self.auth)
+        # Lock must be free despite the failure.
+        with self.manager.site_operation("demo") as acquired:
+            self.assertTrue(acquired, "lock leaked after a failed synchronous operation")
+
+    def test_list_users_is_refused_while_site_is_busy(self):
+        with patch("src.api.routes.users.load_sites_config", return_value=self.site):
+            with self.manager.site_operation("demo") as acquired:
+                self.assertTrue(acquired)
+                resp = self.client.get("/api/sites/demo/users", headers=self.auth)
+        self.assertEqual(resp.status_code, 409)
+        self.assertIn("already in progress", json.loads(resp.data)["error"])
+
+    def test_deactivate_user_is_refused_while_site_is_busy(self):
+        with patch("src.api.routes.users.load_sites_config", return_value=self.site):
+            with self.manager.site_operation("demo") as acquired:
+                self.assertTrue(acquired)
+                resp = self.client.post("/api/sites/demo/users/5/deactivate", headers=self.auth)
+        self.assertEqual(resp.status_code, 409)
+
+    def test_deactivate_user_releases_the_lock_afterwards(self):
+        with patch("src.api.routes.users.load_sites_config", return_value=self.site), \
+             patch("src.api.routes.users.load_credentials", return_value={}), \
+             patch("src.execution.get_executor", return_value=MagicMock()), \
+             patch("src.wp.cli.WPCLI") as mock_wpcli_cls:
+            mock_wpcli_cls.return_value.deactivate_user.return_value = True
+            first = self.client.post("/api/sites/demo/users/5/deactivate", headers=self.auth)
+        self.assertEqual(first.status_code, 200)
+        # A second call must succeed, i.e. the lock was not leaked.
+        with self.manager.site_operation("demo") as acquired:
+            self.assertTrue(acquired, "lock leaked after a synchronous user-management operation")
+
+    def test_scan_sites_is_refused_while_baseline_site_is_busy(self):
+        import tempfile
+        with patch("src.api.routes.sites.load_sites_config", return_value=self.site), \
+             patch("src.config.loader.CONFIG_DIR", tempfile.mkdtemp()):
+            with self.manager.site_operation("demo") as acquired:
+                self.assertTrue(acquired)
+                resp = self.client.post("/api/sites/scan", data=json.dumps({}), headers=self.auth)
+        self.assertEqual(resp.status_code, 409)
+
+    def test_scan_sites_releases_the_lock_afterwards(self):
+        import tempfile
+        with patch("src.api.routes.sites.load_sites_config", return_value=self.site), \
+             patch("src.api.routes.sites.load_credentials", return_value={}), \
+             patch("src.config.loader.CONFIG_DIR", tempfile.mkdtemp()), \
+             patch("src.execution.get_executor", return_value=MagicMock()), \
+             patch("src.wp.cli.WPCLI") as mock_wpcli_cls:
+            mock_wpcli_cls.return_value.scan_server_sites.return_value = []
+            first = self.client.post("/api/sites/scan", data=json.dumps({"force_rescan": True}), headers=self.auth)
+        self.assertEqual(first.status_code, 200)
+        with self.manager.site_operation("demo") as acquired:
+            self.assertTrue(acquired, "lock leaked after scan_sites")
+
+    def test_vulnerability_scan_is_refused_while_site_is_busy(self):
+        with patch("src.api.routes.vulnerability.load_sites_config", return_value=self.site):
+            with self.manager.site_operation("demo") as acquired:
+                self.assertTrue(acquired)
+                resp = self.client.post("/api/sites/demo/vulnerability-scan", headers=self.auth)
+        self.assertEqual(resp.status_code, 409)
+
+    def test_vulnerability_scan_releases_the_lock_afterwards(self):
+        with patch("src.api.routes.vulnerability.load_sites_config", return_value=self.site), \
+             patch("src.api.routes.vulnerability.load_credentials", return_value={}), \
+             patch("src.api.routes.vulnerability.save_sites_config"), \
+             patch("src.execution.get_executor", return_value=MagicMock()), \
+             patch("src.wp.cli.WPCLI") as mock_wpcli_cls:
+            mock_wpcli_cls.return_value.check_vulnerabilities.return_value = {"status": "success", "data": []}
+            first = self.client.post("/api/sites/demo/vulnerability-scan", headers=self.auth)
+        self.assertEqual(first.status_code, 200)
+        with self.manager.site_operation("demo") as acquired:
+            self.assertTrue(acquired, "lock leaked after vulnerability scan")
+
+
+class TestTaskRegistryEviction(unittest.TestCase):
+    """
+    _tasks and _site_locks used to grow for the process lifetime -- nothing
+    ever removed a finished task or a released site lock. /api/system/status
+    returns the full task list, so an unbounded registry is a slow, silent
+    memory leak.
+    """
+
+    def setUp(self):
+        from src.api.tasks import _manager
+        self.manager = _manager
+        self.manager._tasks.clear()
+        self.manager._task_completed_epoch.clear()
+        self.manager._site_locks.clear()
+
+    def tearDown(self):
+        self.manager._tasks.clear()
+        self.manager._task_completed_epoch.clear()
+        self.manager._site_locks.clear()
+
+    def test_finished_task_is_purged_after_the_retention_window(self):
+        from src.api.tasks import _TASK_RETENTION_SECONDS
+        tid = "old-task"
+        self.manager._tasks[tid] = {"task_id": tid, "status": "completed"}
+        self.manager._task_completed_epoch[tid] = time.time() - _TASK_RETENTION_SECONDS - 1
+
+        self.assertIsNone(self.manager.get_task(tid))
+        self.assertNotIn(tid, self.manager.tasks)
+
+    def test_recently_finished_task_is_not_purged_early(self):
+        tid = "fresh-task"
+        self.manager._tasks[tid] = {"task_id": tid, "status": "completed"}
+        self.manager._task_completed_epoch[tid] = time.time()
+
+        self.assertIsNotNone(self.manager.get_task(tid))
+        self.assertIn(tid, self.manager.tasks)
+
+    def test_registry_is_capped_at_max_tracked_tasks(self):
+        from src.api.tasks import _MAX_TRACKED_TASKS
+        now = time.time()
+        for i in range(_MAX_TRACKED_TASKS + 5):
+            tid = f"task-{i}"
+            self.manager._tasks[tid] = {"task_id": tid, "status": "completed"}
+            self.manager._task_completed_epoch[tid] = now + i  # oldest-first order
+
+        remaining = self.manager.tasks
+        self.assertEqual(len(remaining), _MAX_TRACKED_TASKS)
+        # The oldest-finished entries are the ones evicted, not the newest.
+        self.assertNotIn("task-0", remaining)
+        self.assertIn(f"task-{_MAX_TRACKED_TASKS + 4}", remaining)
+
+    def test_running_tasks_are_never_evicted_by_the_cap(self):
+        from src.api.tasks import _MAX_TRACKED_TASKS
+        running_id = "still-running"
+        self.manager._tasks[running_id] = {"task_id": running_id, "status": "running"}
+        now = time.time()
+        for i in range(_MAX_TRACKED_TASKS + 5):
+            tid = f"task-{i}"
+            self.manager._tasks[tid] = {"task_id": tid, "status": "completed"}
+            self.manager._task_completed_epoch[tid] = now + i
+
+        self.assertIn(running_id, self.manager.tasks)
+
+    def test_site_lock_entry_is_dropped_once_released(self):
+        with self.manager.site_operation("evict-me"):
+            self.assertIn("evict-me", self.manager._site_locks)
+        self.assertNotIn("evict-me", self.manager._site_locks)
+
+
+class TestErrorHandlers(unittest.TestCase):
+    def setUp(self):
+        self.app = create_app()
+        self.app.testing = False
+        self.app.config["PROPAGATE_EXCEPTIONS"] = False
+        self.client = self.app.test_client()
+        self.api_token = "test-token"
+        self.env_patcher = patch.dict(os.environ, {"API_TOKEN": self.api_token})
+        self.env_patcher.start()
+        self.auth = {"Authorization": f"Bearer {self.api_token}"}
+
+    def tearDown(self):
+        self.env_patcher.stop()
+
+    def test_500_response_does_not_leak_exception_text(self):
+        # Route handlers generally catch and self-format their own errors
+        # (that duplication is tracked separately as B4); this exercises the
+        # global 500 handler in app.py directly, for a truly unhandled
+        # exception reaching it.
+        @self.app.route("/__test_unhandled_exception")
+        def _raise():
+            raise RuntimeError("super secret internal detail")
+
+        resp = self.client.get("/__test_unhandled_exception")
+
+        self.assertEqual(resp.status_code, 500)
+        data = json.loads(resp.data)
+        self.assertEqual(data["error"], "Internal server error.")
+        self.assertNotIn("super secret internal detail", resp.data.decode())
+
+    def test_oversized_upload_returns_413_not_500(self):
+        self.app.config["MAX_CONTENT_LENGTH"] = 1024
+        oversized = b"0" * 2048
+
+        resp = self.client.post(
+            "/api/system/backups/upload",
+            headers=self.auth,
+            data={"file": (io.BytesIO(oversized), "backup.zip")},
+            content_type="multipart/form-data",
+        )
+
+        self.assertEqual(resp.status_code, 413)
+        data = json.loads(resp.data)
+        self.assertFalse(data["success"])

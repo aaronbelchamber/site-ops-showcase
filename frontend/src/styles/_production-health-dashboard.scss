@@ -1,0 +1,67 @@
+// ==========================================
+// ProductionHealthDashboard.jsx
+// ==========================================
+// Extracted from 21 inline style={{...}} props (B9 remediation).
+@use './tokens' as *;
+
+.phd-thumbs-empty { font-size: 0.8rem; color: var(--md-sys-color-outline); }
+.phd-thumbs-row { display: flex; gap: $space-2; }
+.phd-thumb-col { text-align: center; }
+
+.phd-thumb-img {
+    width: 90px;
+    height: 60px;
+    object-fit: cover;
+    object-position: top;
+    border-radius: $radius-sm;
+    border: 1px solid var(--md-sys-color-outline-variant);
+    cursor: zoom-in;
+}
+.phd-thumb-placeholder {
+    width: 90px;
+    height: 60px;
+    border-radius: $radius-sm;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: var(--md-sys-color-surface-variant);
+    font-size: 0.65rem;
+    color: var(--md-sys-color-outline);
+}
+.phd-thumb-label { font-size: 0.65rem; color: var(--md-sys-color-outline); margin-top: 0.15rem; }
+
+.phd-status-dot-spacing { margin-right: $space-2; }
+.phd-site-link { color: var(--md-sys-color-primary); font-size: 0.85rem; }
+.phd-text-muted-sm { font-size: 0.85rem; color: var(--md-sys-color-outline); }
+
+// .site-table already applies 0.75rem padding to every td (see index.scss);
+// these only add the extra property each specific cell needs, so no
+// override/specificity conflict with that rule.
+.phd-td-sm-text { font-size: 0.85rem; }
+.phd-td-nowrap { white-space: nowrap; }
+
+.phd-error-col { display: flex; flex-direction: column; gap: 0.25rem; }
+.phd-badges-row { display: flex; gap: 0.4rem; }
+.phd-error-preview {
+    font-size: 0.72rem;
+    color: var(--md-sys-color-outline);
+    max-width: 260px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.phd-check-btn-spacing { margin-bottom: 0.4rem; }
+.phd-icon-sm { font-size: 16px; }
+
+// Replaces className="site-table-wrapper" (border/radius/background match,
+// but overflow-x: auto instead of that class's overflow: hidden) rather
+// than combining the two -- .site-table-wrapper's overflow: hidden is a
+// different value for the same property, so compounding wouldn't help;
+// this needs to be the only rule setting overflow for the element.
+.phd-table-wrapper {
+    border: 1px solid var(--md-sys-color-outline-variant);
+    border-radius: $radius-lg;
+    overflow-x: auto;
+    background-color: var(--md-sys-color-surface);
+}

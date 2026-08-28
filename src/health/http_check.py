@@ -224,6 +224,7 @@ class HTTPHealthCheck:
                             "resource_type": req.resource_type,
                         })
             except Exception:
+                # Response handler failure is optional enrichment; page still loads and screenshots captured.
                 pass
 
         def handle_console(msg):

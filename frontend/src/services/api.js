@@ -30,6 +30,22 @@ class APIClient {
         return !!this.getToken();
     }
 
+    /** Human-readable message for a non-JSON HTTP failure. */
+    static describeHttpError(status, statusText) {
+        const known = {
+            0: "The request did not complete.",
+            403: "Forbidden: this action is not permitted.",
+            404: "Not found: the requested resource does not exist.",
+            409: "An operation is already in progress for this site. Please wait for it to finish.",
+            413: "The uploaded file is too large.",
+            500: "The server hit an internal error. Check the backend logs for details.",
+            502: "The backend is unreachable or restarting (502). It may be busy with a long-running operation.",
+            503: "The backend is temporarily unavailable (503).",
+            504: "The request timed out waiting for the backend (504)."
+        };
+        return known[status] || `Request failed with HTTP ${status}${statusText ? ` ${statusText}` : ""}.`;
+    }
+
     async request(endpoint, options = {}) {
         const url = `${this.baseUrl}${endpoint}`;
         
@@ -60,15 +76,46 @@ class APIClient {
                 throw new Error("Unauthorized access. Token has been cleared.");
             }
 
-            const json = await response.json();
-            
+            // The body is not guaranteed to be JSON: a proxy 502, a crashed
+            // worker, or an empty 404 all return HTML or nothing, and calling
+            // response.json() on those surfaced
+            // "Unexpected token '<'" / "Unexpected end of JSON input"
+            // straight into user-facing toasts.
+            let json = null;
+            let parseFailed = false;
+            const rawBody = await response.text();
+            if (rawBody) {
+                try {
+                    json = JSON.parse(rawBody);
+                } catch (e) {
+                    parseFailed = true;
+                }
+            }
+
+            if (parseFailed || json === null) {
+                if (response.ok) {
+                    throw new Error("The server returned an unreadable response.");
+                }
+                throw new Error(APIClient.describeHttpError(response.status, response.statusText));
+            }
+
             if (!response.ok || !json.success) {
-                throw new Error(json.error || `HTTP error! status: ${response.status}`);
+                throw new Error(json.error || APIClient.describeHttpError(response.status, response.statusText));
             }
 
             return json.data;
         } catch (error) {
-            console.error("API Request failed:", error);
+            // A 409 is an expected outcome (the site is busy), not a fault.
+            const expected = typeof error?.message === "string" && error.message.includes("already in progress");
+            if (expected) {
+                console.debug("API request skipped:", error.message);
+            } else {
+                console.error("API Request failed:", error);
+            }
+            if (error instanceof TypeError) {
+                // fetch() rejects with a TypeError when the server is unreachable.
+                throw new Error("Cannot reach the Site Manager backend. Is the server running?");
+            }
             throw error;
         }
     }

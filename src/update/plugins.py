@@ -199,6 +199,7 @@ class PluginUpdater:
             try:
                 self.health_manager.run_all_checks()
             except Exception as e:
+                # Post-update screenshot refresh is best-effort. Update succeeds even if snapshot capture fails.
                 pass
 
         set_task_progress(f"Plugin(s) '{target_name}' updated successfully!")

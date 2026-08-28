@@ -1,8 +1,10 @@
 import time
 import os
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, request
+from werkzeug.exceptions import RequestEntityTooLarge
 from src.api.auth import require_api_key
-from src.api.tasks import BACKGROUND_TASKS
+from src.api.tasks import BACKGROUND_TASKS, _manager as _task_manager
+from src.api.response import ok, err
 from src.config.loader import load_admin_data, save_admin_data, validate_site_name, load_admin_notes, save_admin_notes
 from src.config.system_backup import SystemBackupManager
 from src.logging.logger import logger
@@ -14,47 +16,28 @@ class SystemController:
     @require_api_key
     def get_system_status():
         """Get backend status and list of active/completed background tasks."""
-        return jsonify({
-            "success": True,
-            "data": {
+        _task_manager._purge_stale_tasks()
+        return ok({
                 "status": "online",
                 "active_tasks_count": sum(1 for t in BACKGROUND_TASKS.values() if t["status"] == "running"),
                 "total_tasks_tracked": len(BACKGROUND_TASKS),
                 "tasks": list(BACKGROUND_TASKS.values())
-            },
-            "error": None,
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        })
+            })
 
     @staticmethod
     @require_api_key
     def get_mode():
         """Report whether this process is the full app or the standalone health dashboard."""
-        return jsonify({
-            "success": True,
-            "data": {"mode": os.environ.get("APP_MODE", "full")},
-            "error": None,
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        })
+        return ok({"mode": os.environ.get("APP_MODE", "full")})
 
     @staticmethod
     @require_api_key
     def get_task_status(task_id):
         """Retrieve status, error, and result of a background task."""
         if task_id not in BACKGROUND_TASKS:
-            return jsonify({
-                "success": False,
-                "data": None,
-                "error": f"Task ID '{task_id}' not found.",
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }), 404
+            return err(f"Task ID '{task_id}' not found.", 404)
             
-        return jsonify({
-            "success": True,
-            "data": BACKGROUND_TASKS[task_id],
-            "error": None,
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        })
+        return ok(BACKGROUND_TASKS[task_id])
 
     @staticmethod
     @require_api_key
@@ -67,6 +50,7 @@ class SystemController:
         try:
             log_retention = int(os.getenv("LOG_RETENTION_DAYS", "30"))
         except Exception:
+            # Invalid LOG_RETENTION_DAYS value; fall back to 30-day default
             log_retention = 30
             
         cleanup_mgr = CleanupManager()
@@ -80,16 +64,11 @@ class SystemController:
         search_query = request.args.get("query", "").strip().lower()
         
         if not os.path.exists(log_path):
-            return jsonify({
-                "success": True,
-                "data": {
+            return ok({
                     "log_file_found": False,
                     "lines": [],
                     "entries": []
-                },
-                "error": None,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            })
+                })
             
         try:
             with open(log_path, "r", encoding="utf-8") as f:
@@ -140,23 +119,13 @@ class SystemController:
                 lvl_part = f"[{entry['level']}] " if entry['level'] else ""
                 legacy_lines.append(f"{ts_part}{lvl_part}{entry['message']}")
                 
-            return jsonify({
-                "success": True,
-                "data": {
+            return ok({
                     "log_file_found": True,
                     "lines": legacy_lines,
                     "entries": sliced_entries
-                },
-                "error": None,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            })
+                })
         except Exception as e:
-            return jsonify({
-                "success": False,
-                "data": None,
-                "error": f"Failed to read log file: {e}",
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }), 500
+            return err(f"Failed to read log file: {e}", 500)
 
     @staticmethod
     @require_api_key
@@ -185,18 +154,14 @@ class SystemController:
                                     "type": first_line.strip("- \n\r")
                                 })
                     except Exception:
+                        # Malformed key file or read error; skip it, continue listing others
                         pass
                         
-        return jsonify({
-            "success": True,
-            "data": {
+        return ok({
                 "agent_active": agent_active or ("SSH_AUTH_SOCK" in os.environ),
                 "agent_keys": agent_keys,
                 "keys": discovered_keys
-            },
-            "error": None,
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        })
+            })
 
     @staticmethod
     @require_api_key
@@ -207,7 +172,7 @@ class SystemController:
         body = request.get_json() or {}
         name = body.get("name")
         if not name:
-            return jsonify({"success": False, "data": None, "error": "Key name is required.", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 400
+            return err("Key name is required.", 400)
             
         # Prevent path traversal
         name = os.path.basename(name)
@@ -215,22 +180,17 @@ class SystemController:
         key_path = ssh_dir / name
         
         if not key_path.exists() or not key_path.is_file():
-            return jsonify({"success": False, "data": None, "error": f"Key file '{name}' not found.", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 404
+            return err(f"Key file '{name}' not found.", 404)
             
         try:
             with open(key_path, "r", encoding="utf-8") as f:
                 content = f.read()
-            return jsonify({
-                "success": True,
-                "data": {
+            return ok({
                     "name": name,
                     "content": content
-                },
-                "error": None,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            })
+                })
         except Exception as e:
-            return jsonify({"success": False, "data": None, "error": f"Failed to read key file: {e}", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 500
+            return err(f"Failed to read key file: {e}", 500)
 
     @staticmethod
     @require_api_key
@@ -242,14 +202,9 @@ class SystemController:
         ssh_config_path = Path.home() / ".ssh" / "config"
         profiles = SSHExecutor.parse_ssh_config(str(ssh_config_path))
                 
-        return jsonify({
-            "success": True,
-            "data": {
+        return ok({
                 "profiles": profiles
-            },
-            "error": None,
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        })
+            })
 
     @staticmethod
     @require_api_key
@@ -280,12 +235,7 @@ class SystemController:
                 err_msg = result.stderr or result.stdout or ""
                 if "1058" in err_msg or "disabled" in err_msg.lower():
                     err_msg = "The Windows OpenSSH Authentication Agent service is disabled (Error 1058). Please enable it by running 'Set-Service -Name ssh-agent -StartupType Manual' in an Administrator PowerShell first."
-                return jsonify({
-                    "success": False,
-                    "data": None,
-                    "error": f"Failed to start ssh-agent: {err_msg}",
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                }), 500
+                return err(f"Failed to start ssh-agent: {err_msg}", 500)
                 
             stdout = result.stdout
             
@@ -302,30 +252,15 @@ class SystemController:
                     pid = agent_pid_match.group(1).strip()
                     os.environ["SSH_AGENT_PID"] = pid
                     
-                return jsonify({
-                    "success": True,
-                    "data": {
+                return ok({
                         "ssh_auth_sock": sock_path,
                         "ssh_agent_pid": pid
-                    },
-                    "error": None,
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                })
+                    })
             else:
-                return jsonify({
-                    "success": False,
-                    "data": None,
-                    "error": f"Failed to parse SSH_AUTH_SOCK from ssh-agent output: {stdout}",
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                }), 500
+                return err(f"Failed to parse SSH_AUTH_SOCK from ssh-agent output: {stdout}", 500)
                 
         except Exception as e:
-            return jsonify({
-                "success": False,
-                "data": None,
-                "error": f"Failed to run ssh-agent: {e}",
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }), 500
+            return err(f"Failed to run ssh-agent: {e}", 500)
 
     @staticmethod
     @require_api_key
@@ -392,22 +327,12 @@ class SystemController:
                     wp_status = f"Path does not exist on target host."
                     
             executor.disconnect()
-            return jsonify({
-                "success": True,
-                "data": {
+            return ok({
                     "message": "SSH Connection successful!",
                     "wp_path_status": wp_status
-                },
-                "error": None,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            })
+                })
         except Exception as e:
-            return jsonify({
-                "success": False,
-                "data": None,
-                "error": str(e),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }), 400
+            return err(str(e), 400)
 
     @staticmethod
     @require_api_key
@@ -415,19 +340,9 @@ class SystemController:
         """Retrieve the entire admin_data.json file content."""
         try:
             data = load_admin_data()
-            return jsonify({
-                "success": True,
-                "data": data,
-                "error": None,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            })
+            return ok(data)
         except Exception as e:
-            return jsonify({
-                "success": False,
-                "data": None,
-                "error": str(e),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }), 500
+            return err(str(e), 500)
 
     @staticmethod
     @require_api_key
@@ -455,19 +370,9 @@ class SystemController:
                     
             save_admin_data(existing)
             logger.info("Admin settings updated in admin_data.json.")
-            return jsonify({
-                "success": True,
-                "data": existing,
-                "error": None,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            })
+            return ok(existing)
         except Exception as e:
-            return jsonify({
-                "success": False,
-                "data": None,
-                "error": str(e),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }), 400
+            return err(str(e), 400)
 
     @staticmethod
     @require_api_key
@@ -475,21 +380,11 @@ class SystemController:
         """Retrieve the admin notes plaintext content."""
         try:
             notes = load_admin_notes()
-            return jsonify({
-                "success": True,
-                "data": {
+            return ok({
                     "notes": notes
-                },
-                "error": None,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            })
+                })
         except Exception as e:
-            return jsonify({
-                "success": False,
-                "data": None,
-                "error": str(e),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }), 500
+            return err(str(e), 500)
 
     @staticmethod
     @require_api_key
@@ -500,21 +395,11 @@ class SystemController:
             notes = body.get("notes", "")
             save_admin_notes(notes)
             logger.info("Admin notes updated in admin_notes.txt.")
-            return jsonify({
-                "success": True,
-                "data": {
+            return ok({
                     "notes": notes
-                },
-                "error": None,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            })
+                })
         except Exception as e:
-            return jsonify({
-                "success": False,
-                "data": None,
-                "error": str(e),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }), 500
+            return err(str(e), 500)
 
     @staticmethod
     @require_api_key
@@ -522,19 +407,9 @@ class SystemController:
         """List all configuration backup files."""
         try:
             backups = SystemBackupManager.list_backups()
-            return jsonify({
-                "success": True,
-                "data": backups,
-                "error": None,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            })
+            return ok(backups)
         except Exception as e:
-            return jsonify({
-                "success": False,
-                "data": None,
-                "error": str(e),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }), 500
+            return err(str(e), 500)
 
     @staticmethod
     @require_api_key
@@ -544,22 +419,12 @@ class SystemController:
             path = SystemBackupManager.create_backup()
             filename = os.path.basename(path)
             logger.info(f"System settings configuration backup created: '{filename}'.")
-            return jsonify({
-                "success": True,
-                "data": {
+            return ok({
                     "filename": filename,
                     "message": "System settings backup created successfully."
-                },
-                "error": None,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            })
+                })
         except Exception as e:
-            return jsonify({
-                "success": False,
-                "data": None,
-                "error": str(e),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }), 500
+            return err(str(e), 500)
 
     @staticmethod
     @require_api_key
@@ -569,30 +434,15 @@ class SystemController:
             body = request.get_json() or {}
             filename = body.get("filename")
             if not filename:
-                return jsonify({
-                    "success": False,
-                    "data": None,
-                    "error": "Filename is required.",
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                }), 400
+                return err("Filename is required.", 400)
             
             SystemBackupManager.restore_backup(filename)
             logger.info(f"System settings configuration restored from backup: '{filename}'.")
-            return jsonify({
-                "success": True,
-                "data": {
+            return ok({
                     "message": f"System settings restored successfully from '{filename}'."
-                },
-                "error": None,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            })
+                })
         except Exception as e:
-            return jsonify({
-                "success": False,
-                "data": None,
-                "error": str(e),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }), 500
+            return err(str(e), 500)
 
     @staticmethod
     @require_api_key
@@ -602,21 +452,11 @@ class SystemController:
             filename = os.path.basename(filename)
             SystemBackupManager.delete_backup(filename)
             logger.info(f"System settings configuration backup deleted: '{filename}'.")
-            return jsonify({
-                "success": True,
-                "data": {
+            return ok({
                     "message": f"Backup '{filename}' deleted successfully."
-                },
-                "error": None,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            })
+                })
         except Exception as e:
-            return jsonify({
-                "success": False,
-                "data": None,
-                "error": str(e),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }), 500
+            return err(str(e), 500)
 
     @staticmethod
     @require_api_key
@@ -627,11 +467,11 @@ class SystemController:
             backup_dir = SystemBackupManager.get_backup_dir()
             path = backup_dir / filename
             if not path.exists():
-                return jsonify({"success": False, "error": "Backup file not found."}), 404
+                return err("Backup file not found.", 404)
             from flask import send_from_directory
             return send_from_directory(str(backup_dir), filename, as_attachment=True)
         except Exception as e:
-            return jsonify({"success": False, "error": str(e)}), 500
+            return err(str(e), 500)
 
     @staticmethod
     @require_api_key
@@ -639,20 +479,10 @@ class SystemController:
         """Upload a backup ZIP file and restore configuration settings from it."""
         try:
             if 'file' not in request.files:
-                return jsonify({
-                    "success": False,
-                    "data": None,
-                    "error": "No file part in the request.",
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                }), 400
+                return err("No file part in the request.", 400)
             file = request.files['file']
             if file.filename == '':
-                return jsonify({
-                    "success": False,
-                    "data": None,
-                    "error": "No file selected.",
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                }), 400
+                return err("No file selected.", 400)
             
             if file and file.filename.endswith('.zip'):
                 backup_dir = SystemBackupManager.get_backup_dir()
@@ -663,31 +493,20 @@ class SystemController:
                 try:
                     SystemBackupManager.restore_backup(temp_filename)
                     logger.info(f"System settings configuration uploaded and restored successfully: '{file.filename}'.")
-                    return jsonify({
-                        "success": True,
-                        "data": {
+                    return ok({
                             "message": "System settings restored successfully from uploaded file."
-                        },
-                        "error": None,
-                        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                    })
+                        })
                 finally:
                     if temp_path.exists():
                         temp_path.unlink()
             else:
-                return jsonify({
-                    "success": False,
-                    "data": None,
-                    "error": "Only ZIP files are supported.",
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                }), 400
+                return err("Only ZIP files are supported.", 400)
+        except RequestEntityTooLarge:
+            # Let Flask's own 413 handler serve the standard envelope instead
+            # of this route's blanket except-Exception turning it into a 500.
+            raise
         except Exception as e:
-            return jsonify({
-                "success": False,
-                "data": None,
-                "error": str(e),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }), 500
+            return err(str(e), 500)
 
 # Export module level get_task_status for app.py mapping
 get_task_status = SystemController.get_task_status

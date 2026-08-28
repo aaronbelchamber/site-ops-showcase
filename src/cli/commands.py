@@ -591,26 +591,57 @@ class RunServerCommand(BaseCommand):
     
     def execute(self, args: Any) -> int:
         import os
-
+        import time
+        
         dotenv.load_dotenv(ENV_PATH)
-
+        
+        # Set environment variables for the headroom proxy sticky configuration
+        os.environ["GEMINI_API_URL"] = "http://127.0.0.1:8787"
+        os.environ["GEMINI_BASE_URL"] = "http://127.0.0.1:8787"
+        
         # Under Flask's Werkzeug reloader (when debug=True), the execution runs twice:
         # first in the parent process, then in the child process.
-        # We only clean up the port in the parent process (or if reloader is disabled)
-        # to avoid interfering with the reloader's own child process on auto-reload.
+        # We only clean up processes and start the proxy in the parent process (or if reloader is disabled)
+        # to prevent terminating the proxy/reloader on every auto-reload cycle.
         is_reloader_child = os.environ.get("WERKZEUG_RUN_MAIN") == "true"
-
+        proxy_process = None
+        executor = get_executor()
+        
         if not is_reloader_child:
+            # Clean up any existing processes on ports args.port and 8787
             _kill_process_on_port(args.port)
-
-        from src.api.app import create_app, start_cleanup_scheduler
+            _kill_process_on_port(8787)
+            
+            # Start headroom proxy as a background process via executor abstraction
+            try:
+                print("Starting Headroom Proxy on port 8787...")
+                if hasattr(executor, "start_background_process"):
+                    proxy_process = executor.start_background_process(["headroom", "proxy", "--port", "8787"])
+                # Give the proxy a brief moment to start up
+                time.sleep(0.5)
+            except Exception as e:
+                print(f"Warning: Failed to start headroom proxy: {e}")
+                
+        from src.api.app import create_app, start_cleanup_scheduler, serve_app
         debug_mode = not args.no_debug
         print(f"Starting server on {args.host}:{args.port} (debug={debug_mode})...")
 
         start_cleanup_scheduler(debug=debug_mode)
 
-        app = create_app()
-        app.run(host=args.host, port=args.port, debug=debug_mode)
+        try:
+            app = create_app()
+            serve_app(app, args.host, args.port, debug=debug_mode)
+        finally:
+            if not is_reloader_child:
+                if proxy_process:
+                    print("Stopping Headroom Proxy...")
+                    try:
+                        proxy_process.terminate()
+                        proxy_process.wait(timeout=2)
+                    except Exception:
+                        pass
+                # Make absolutely sure it's dead
+                _kill_process_on_port(8787)
 
         return 0
 
@@ -631,14 +662,14 @@ class HealthDashboardCommand(BaseCommand):
         if not is_reloader_child:
             _kill_process_on_port(args.port)
 
-        from src.api.app import create_app, start_cleanup_scheduler
+        from src.api.app import create_app, start_cleanup_scheduler, serve_app
         debug_mode = not args.no_debug
         print(f"Starting Production Health dashboard on {args.host}:{args.port} (debug={debug_mode})...")
 
         start_cleanup_scheduler(debug=debug_mode)
 
         app = create_app()
-        app.run(host=args.host, port=args.port, debug=debug_mode)
+        serve_app(app, args.host, args.port, debug=debug_mode)
         return 0
 
 
@@ -654,10 +685,14 @@ class CleanupCommand(BaseCommand):
             try:
                 days = int(os.getenv("BACKUP_RETENTION_DAYS", "30"))
             except Exception:
+                print(f"  [WARNING] BACKUP_RETENTION_DAYS='{os.getenv('BACKUP_RETENTION_DAYS')}' is not a valid "
+                      f"integer; falling back to 30 days.")
                 days = 30
             try:
                 log_days = int(os.getenv("LOG_RETENTION_DAYS", "30"))
             except Exception:
+                print(f"  [WARNING] LOG_RETENTION_DAYS='{os.getenv('LOG_RETENTION_DAYS')}' is not a valid "
+                      f"integer; falling back to 30 days.")
                 log_days = 30
         else:
             log_days = days

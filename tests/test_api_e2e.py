@@ -118,7 +118,7 @@ class TestAPIEndToEnd(unittest.TestCase):
     def _mock_execute_stream(self, cmd, output_path, timeout=None):
         # Simulate writing data to stream output path
         with open(output_path, "wb") as f:
-            f.write(b"dummy sql or asset tar file data")
+            f.write(b"dummy sql or asset tar file data" * 16)  # clears DatabaseBackup.MIN_PLAUSIBLE_DUMP_BYTES
         return CommandResult(exit_code=0, stdout="Success streaming\n", stderr="", success=True)
 
     def _mock_execute_stream_input(self, cmd, input_path, timeout=None):

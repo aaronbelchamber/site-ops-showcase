@@ -3,6 +3,7 @@ import json
 import logging
 from typing import Dict, Any, Optional
 from src.execution.base import BaseExecutor
+from src.execution.shell import is_windows_local, quote_path, quote_posix
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +15,19 @@ wp-content/upgrade/
 wp-content/backup-db/
 wp-content/backups/
 wp-content/cache/
+
+# Backup-plugin output. These archives are hundreds of MB to over a GB, exceed
+# GitHub's 100MB per-file hard limit, and typically embed a full database dump
+# - so they are both unpushable and a credential risk. Found tracked on three
+# sites on 2026-08-27.
+wp-content/ai1wm-backups/
+wp-content/updraft/
+wp-content/backups-dup-*/
+wp-content/backupwordpress-*/
+*.wpress
+*.sql
+*.sql.gz
+
 *.log
 .htaccess
 .env
@@ -36,11 +50,29 @@ class GitManager:
         self.repo_name = f"wp-{self.site_name}"
         self.git_remote_url = site_config.get("git_remote_url")
 
+    def _is_windows_local(self) -> bool:
+        """Check if executing locally on a Windows host."""
+        return is_windows_local(self.executor)
+
+    def _get_cd_prefix(self) -> str:
+        """
+        Get the shell command prefix to change directory to the site's wp_path.
+
+        wp_path is operator-supplied; double quotes alone would still allow
+        $(...) / backtick substitution to execute, so it must be shell-quoted
+        for whichever shell will actually run the command.
+        """
+        if self._is_windows_local():
+            # Use /d to change drive on Windows cmd
+            normalized_path = os.path.normpath(self.wp_path)
+            return f'cd /d {quote_path(normalized_path, "wp_path", True)} && '
+        return f'cd {quote_path(self.wp_path, "wp_path", False)} && '
+
     def _run_git(self, git_command: str, timeout: int = 60):
         """Execute a git command within the site wp_path directory."""
         if not self.wp_path:
             return None
-        cmd = f'cd "{self.wp_path}" && {git_command}'
+        cmd = f'{self._get_cd_prefix()}{git_command}'
         return self.executor.execute(cmd, timeout=timeout)
 
     def is_initialized(self) -> bool:
@@ -257,9 +289,10 @@ class GitManager:
             return {"success": True, "message": "No code changes detected to commit"}
 
         commit_msg = self.extract_versions_from_update(update_result, versions_before, versions_after)
-        # Escape double quotes for shell execution
-        safe_msg = commit_msg.replace('"', '\\"')
-        commit_res = self._run_git(f'git commit -m "{safe_msg}"')
+        # The message is assembled from plugin/theme names reported by the
+        # managed WordPress site, so it is untrusted input. Escaping only `"`
+        # left $(...) and backticks live; quote the whole argument instead.
+        commit_res = self._run_git(f'git commit -m {quote_posix(commit_msg)}')
 
         if not commit_res or not commit_res.success:
             return {

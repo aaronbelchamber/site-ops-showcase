@@ -2,17 +2,20 @@
 // only exports the component (keeps Fast Refresh working) and so this logic
 // is unit-testable without rendering the app.
 
-export const STALE_THRESHOLD_HOURS = 24;
+// Staleness thresholds live in siteStaleness.js so the dashboard chip, the card
+// dot and the component badges cannot drift apart. These wrappers just adapt a
+// whole `site` to the `updateInfo` shape those helpers take.
+import {
+    UPDATE_FRESH_HOURS,
+    getHoursSinceLastUpdateCheck,
+    isUpdateCheckStale,
+} from "./siteStaleness";
 
-export const getHoursSinceLastCheck = (site) => {
-    const timestamp = site?.update_summary?.timestamp;
-    if (!timestamp) return Infinity;
-    const checkDate = new Date(timestamp);
-    if (isNaN(checkDate.getTime())) return Infinity;
-    return (Date.now() - checkDate.getTime()) / (1000 * 60 * 60);
-};
+export const STALE_THRESHOLD_HOURS = UPDATE_FRESH_HOURS;
 
-export const isSiteStale = (site) => getHoursSinceLastCheck(site) > STALE_THRESHOLD_HOURS;
+export const getHoursSinceLastCheck = (site) => getHoursSinceLastUpdateCheck(site?.update_summary);
+
+export const isSiteStale = (site) => isUpdateCheckStale(site?.update_summary);
 
 // Strips scheme/www for a compact display label while callers keep the
 // full URL as the link href (mirrors SiteConfigManager.get_site_domain()).

@@ -1,6 +1,7 @@
 import os
 import json
 import time
+import threading
 from flask import Blueprint, request, jsonify
 
 
@@ -10,14 +11,49 @@ from src.config.loader import (
     load_credentials,
     save_credentials,
     load_raw_credentials,
-    load_raw_sites_config,
     mask_credential_keys,
     PROJECT_ROOT,
 )
 from src.api.auth import require_api_key
+from src.api.response import ok, err
+from src.api.tasks import site_operation, operation_in_progress_response
 from src.logging.logger import logger
 
 sites_bp = Blueprint("sites", __name__)
+
+# GET /api/sites attaches each site's latest health snapshot (read from
+# logs/health/last_snapshot_{name}.json) so SiteCard can render health status
+# without an extra per-card request -- see the comment in
+# frontend/src/components/SiteCard.jsx for why that request was removed.
+# That makes this file re-opened and re-parsed by every poll (on load, after
+# every completed task, on manual refresh) even though a health check only
+# updates it once per check run. Cache the parsed JSON per file, invalidated
+# by (mtime, size), the same pattern src/config/loader.py uses for
+# credentials.enc.
+_health_snapshot_cache_lock = threading.Lock()
+_health_snapshot_cache: dict = {}
+
+
+def _read_json_cached(path: str):
+    """Read and parse a small JSON file, cached until its (mtime, size) changes."""
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return None
+    stamp = (stat.st_mtime_ns, stat.st_size)
+
+    with _health_snapshot_cache_lock:
+        cached = _health_snapshot_cache.get(path)
+        if cached is not None and cached[0] == stamp:
+            return cached[1]
+
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    with _health_snapshot_cache_lock:
+        _health_snapshot_cache[path] = (stamp, data)
+    return data
+
 
 class SitesController:
     @staticmethod
@@ -38,6 +74,7 @@ class SitesController:
                         with open(cache_file, "r", encoding="utf-8") as cf:
                             config["update_summary"] = json.load(cf)
                     except Exception:
+                        # Cache miss or corruption is fine; site listing continues without summary
                         pass
                 else:
                     history_file = os.path.join(PROJECT_ROOT, "logs", "updates", f"{name}.jsonl")
@@ -56,15 +93,17 @@ class SitesController:
                                             "themes": {"updates_available": False, "themes": []}
                                         }
                         except Exception:
+                            # History log corrupted or missing; best-effort summary is fine
                             pass
 
                 # Attach cached health-check summary if available (console errors,
-                # last-checked timestamp/id, overall status) for the Production Health dashboard.
+                # last-checked timestamp/id, overall status) -- SiteCard renders
+                # from this on every dashboard poll, so the read is cached (see
+                # _read_json_cached) rather than re-parsed every time.
                 health_snapshot_file = os.path.join(PROJECT_ROOT, "logs", "health", f"last_snapshot_{name}.json")
-                if os.path.exists(health_snapshot_file):
-                    try:
-                        with open(health_snapshot_file, "r", encoding="utf-8") as hf:
-                            snapshot = json.load(hf)
+                try:
+                    snapshot = _read_json_cached(health_snapshot_file)
+                    if snapshot:
                         http_check = snapshot.get("checks", {}).get("http", {})
                         console_errors = http_check.get("console_errors", [])
                         active_errors = [e for e in console_errors if e.get("severity") != "ignored"]
@@ -75,22 +114,13 @@ class SitesController:
                             "error_summary": http_check.get("error_summary", {}),
                             "latest_console_errors": active_errors[:3],
                         }
-                    except Exception:
-                        pass
+                except Exception:
+                    # Health snapshot cache miss/corruption is fine; site lists without it
+                    pass
 
-            return jsonify({
-                "success": True,
-                "data": list(sites.values()),
-                "error": None,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            })
+            return ok(list(sites.values()))
         except Exception as e:
-            return jsonify({
-                "success": False,
-                "data": None,
-                "error": f"Failed to retrieve sites: {e}",
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }), 500
+            return err(f"Failed to retrieve sites: {e}", 500)
 
     @staticmethod
     @require_api_key
@@ -98,12 +128,7 @@ class SitesController:
         try:
             sites = load_sites_config()
             if site_name not in sites:
-                return jsonify({
-                    "success": False,
-                    "data": None,
-                    "error": f"Site '{site_name}' not found.",
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                }), 404
+                return err(f"Site '{site_name}' not found.", 404)
                 
             site_config = dict(sites[site_name])
             
@@ -120,19 +145,9 @@ class SitesController:
             else:
                 site_config["ssh_private_key"] = ""
                 
-            return jsonify({
-                "success": True,
-                "data": site_config,
-                "error": None,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            })
+            return ok(site_config)
         except Exception as e:
-            return jsonify({
-                "success": False,
-                "data": None,
-                "error": str(e),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }), 500
+            return err(str(e), 500)
 
     @staticmethod
     @require_api_key
@@ -141,11 +156,11 @@ class SitesController:
             body = request.get_json() or {}
             site_name = body.get("site_name")
             if not site_name:
-                return jsonify({"success": False, "data": None, "error": "Missing 'site_name'.", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 400
+                return err("Missing 'site_name'.", 400)
                 
             sites = load_sites_config()
             if site_name in sites:
-                return jsonify({"success": False, "data": None, "error": f"Site '{site_name}' already exists.", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 409
+                return err(f"Site '{site_name}' already exists.", 409)
                 
             # Parse fields
             display_name = body.get("display_name", "My WordPress Site")
@@ -216,7 +231,7 @@ class SitesController:
                 validated = SiteConfigModel(**validation_config)
                 site_config = validated.model_dump()
             except Exception as e:
-                return jsonify({"success": False, "data": None, "error": f"Validation failed: {e}", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 400
+                return err(f"Validation failed: {e}", 400)
                 
             # Save non-sensitive site config
             sites[site_name] = site_config
@@ -236,20 +251,10 @@ class SitesController:
             response_data = dict(site_config)
             response_data["site_name"] = site_name
             
-            return jsonify({
-                "success": True,
-                "data": response_data,
-                "error": None,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }), 201
+            return ok(response_data, 201)
             
         except Exception as e:
-            return jsonify({
-                "success": False,
-                "data": None,
-                "error": str(e),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }), 500
+            return err(str(e), 500)
 
     @staticmethod
     @require_api_key
@@ -257,7 +262,7 @@ class SitesController:
         try:
             sites = load_sites_config()
             if site_name not in sites:
-                return jsonify({"success": False, "data": None, "error": f"Site '{site_name}' not found.", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 404
+                return err(f"Site '{site_name}' not found.", 404)
                 
             body = request.get_json() or {}
             
@@ -290,7 +295,7 @@ class SitesController:
                 validated = SiteConfigModel(**validation_config)
                 site_config = validated.model_dump()
             except Exception as e:
-                return jsonify({"success": False, "data": None, "error": f"Validation failed: {e}", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 400
+                return err(f"Validation failed: {e}", 400)
                 
             # Update credentials if provided
             credentials = load_raw_credentials()
@@ -316,19 +321,9 @@ class SitesController:
             response_data = dict(site_config)
             response_data["site_name"] = site_name
             
-            return jsonify({
-                "success": True,
-                "data": response_data,
-                "error": None,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            })
+            return ok(response_data)
         except Exception as e:
-            return jsonify({
-                "success": False,
-                "data": None,
-                "error": str(e),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }), 500
+            return err(str(e), 500)
 
     @staticmethod
     @require_api_key
@@ -336,7 +331,7 @@ class SitesController:
         try:
             sites = load_sites_config()
             if site_name not in sites:
-                return jsonify({"success": False, "data": None, "error": f"Site '{site_name}' not found.", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 404
+                return err(f"Site '{site_name}' not found.", 404)
                 
             sites.pop(site_name)
             credentials = load_raw_credentials()
@@ -347,19 +342,9 @@ class SitesController:
             save_sites_config(sites)
             logger.info(f"Site '{site_name}' successfully deleted.")
             
-            return jsonify({
-                "success": True,
-                "data": {"message": f"Site '{site_name}' successfully removed."},
-                "error": None,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            })
+            return ok({"message": f"Site '{site_name}' successfully removed."})
         except Exception as e:
-            return jsonify({
-                "success": False,
-                "data": None,
-                "error": str(e),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }), 500
+            return err(str(e), 500)
 
     @staticmethod
     @require_api_key
@@ -476,6 +461,7 @@ class SitesController:
                                 "discovered": old_disc
                             }
                 except Exception:
+                    # Cached discovery data corrupted or missing; scan will run fresh
                     pass
 
             if not force_rescan and cached_scans:
@@ -508,14 +494,19 @@ class SitesController:
                     site_name = list(sites.keys())[0]
 
             if not site_name:
-                return jsonify({"success": False, "data": None, "error": "No baseline site available for SSH execution."}), 400
+                return err("No baseline site available for SSH execution.", 400)
 
             site_config = sites.get(site_name)
-            executor = get_executor(site_config, credentials)
-            wp_path = site_config.get("wp_path", "/")
-            cli = WPCLI(executor, wp_path=wp_path)
-            
-            discovered_raw = cli.scan_server_sites(search_root=search_root)
+            with site_operation(site_name) as acquired:
+                if not acquired:
+                    return operation_in_progress_response(site_name)
+                executor = get_executor(site_config, credentials)
+                try:
+                    wp_path = site_config.get("wp_path", "/")
+                    cli = WPCLI(executor, wp_path=wp_path)
+                    discovered_raw = cli.scan_server_sites(search_root=search_root)
+                finally:
+                    executor.disconnect()
             user_key = site_config.get("ssh_user") or site_config.get("credential_profile") or "default"
             scan_timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
@@ -572,179 +563,7 @@ class SitesController:
 
 
         except Exception as e:
-            return jsonify({"success": False, "data": None, "error": str(e)}), 500
-
-    @staticmethod
-    @require_api_key
-    def list_users(site_name):
-        try:
-            from src.execution import get_executor
-            from src.wp.cli import WPCLI
-            sites = load_sites_config()
-            credentials = load_credentials()
-            if site_name not in sites:
-                return jsonify({"success": False, "data": None, "error": f"Site '{site_name}' not found."}), 404
-            site_config = sites[site_name]
-            if site_config.get("status") != "Ready":
-                return jsonify({"success": False, "data": None, "error": f"Site '{site_name}' is not Ready."}), 400
-            executor = get_executor(site_config, credentials)
-            cli = WPCLI(executor, wp_path=site_config["wp_path"], wp_cli_path=site_config.get("wp_cli_path"))
-            users = cli.list_users()
-            
-            # Record last_users_checked timestamp on site
-            site_config["last_users_checked"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            sites[site_name] = site_config
-            save_sites_config(sites)
-
-            return jsonify({
-                "success": True, 
-                "data": {
-                    "users": users,
-                    "last_users_checked": site_config["last_users_checked"]
-                }, 
-                "error": None, 
-                "timestamp": site_config["last_users_checked"]
-            })
-        except Exception as e:
-            return jsonify({"success": False, "data": None, "error": str(e)}), 500
-
-    @staticmethod
-    @require_api_key
-    def update_user_role(site_name, user_id):
-        try:
-            from src.execution import get_executor
-            from src.wp.cli import WPCLI
-            req_data = request.get_json() or {}
-            role = req_data.get("role")
-            if not role:
-                return jsonify({"success": False, "data": None, "error": "Role is required."}), 400
-            sites = load_sites_config()
-            credentials = load_credentials()
-            site_config = sites.get(site_name)
-            if not site_config or site_config.get("status") != "Ready":
-                return jsonify({"success": False, "data": None, "error": "Invalid site status."}), 400
-            executor = get_executor(site_config, credentials)
-            cli = WPCLI(executor, wp_path=site_config["wp_path"], wp_cli_path=site_config.get("wp_cli_path"))
-            ok = cli.update_user_role(int(user_id), role)
-            return jsonify({"success": ok, "data": {"user_id": user_id, "role": role}, "error": None if ok else "Failed to update role."})
-        except Exception as e:
-            return jsonify({"success": False, "data": None, "error": str(e)}), 500
-
-    @staticmethod
-    @require_api_key
-    def deactivate_user(site_name, user_id):
-        try:
-            from src.execution import get_executor
-            from src.wp.cli import WPCLI
-            sites = load_sites_config()
-            credentials = load_credentials()
-            site_config = sites.get(site_name)
-            if not site_config or site_config.get("status") != "Ready":
-                return jsonify({"success": False, "data": None, "error": "Invalid site status."}), 400
-            executor = get_executor(site_config, credentials)
-            cli = WPCLI(executor, wp_path=site_config["wp_path"], wp_cli_path=site_config.get("wp_cli_path"))
-            ok = cli.deactivate_user(int(user_id))
-            return jsonify({"success": ok, "data": {"user_id": user_id, "status": "deactivated"}, "error": None if ok else "Failed to deactivate user."})
-        except Exception as e:
-            return jsonify({"success": False, "data": None, "error": str(e)}), 500
-
-    @staticmethod
-    @require_api_key
-    def delete_user(site_name, user_id):
-        try:
-            from src.execution import get_executor
-            from src.wp.cli import WPCLI
-            reassign_id = request.args.get("reassign_id", type=int)
-            if not reassign_id:
-                return jsonify({"success": False, "data": None, "error": "reassign_id query parameter is required."}), 400
-            sites = load_sites_config()
-            credentials = load_credentials()
-            site_config = sites.get(site_name)
-            if not site_config or site_config.get("status") != "Ready":
-                return jsonify({"success": False, "data": None, "error": "Invalid site status."}), 400
-            executor = get_executor(site_config, credentials)
-            cli = WPCLI(executor, wp_path=site_config["wp_path"], wp_cli_path=site_config.get("wp_cli_path"))
-            ok = cli.delete_user(int(user_id), reassign_id)
-            return jsonify({"success": ok, "data": {"user_id": user_id, "deleted": ok}, "error": None if ok else "Failed to delete user."})
-        except Exception as e:
-            return jsonify({"success": False, "data": None, "error": str(e)}), 500
-
-    @staticmethod
-    @require_api_key
-    def run_vulnerability_scan(site_name):
-        try:
-            from src.execution import get_executor
-            from src.wp.cli import WPCLI
-            sites = load_sites_config()
-            credentials = load_credentials()
-            site_config = sites.get(site_name)
-            if not site_config or site_config.get("status") != "Ready":
-                return jsonify({"success": False, "data": None, "error": f"Site '{site_name}' is not Ready."}), 400
-            executor = get_executor(site_config, credentials)
-            cli = WPCLI(executor, wp_path=site_config["wp_path"], wp_cli_path=site_config.get("wp_cli_path"))
-            result = cli.check_vulnerabilities()
-            
-            # Record timestamp and scan results in site config
-            site_config["last_vulnerability_scan"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            site_config["last_vulnerability_details"] = result
-            if result.get("status") == "success" and result.get("data"):
-                site_config["vulnerability_status"] = "red" if len(result["data"]) > 0 else "green"
-            else:
-                site_config["vulnerability_status"] = "yellow"
-            sites[site_name] = site_config
-            save_sites_config(sites)
-
-            return jsonify({"success": True, "data": result, "error": None, "timestamp": site_config["last_vulnerability_scan"]})
-
-        except Exception as e:
-            return jsonify({"success": False, "data": None, "error": str(e)}), 500
-
-    @staticmethod
-    @require_api_key
-    def install_vulnerability_package(site_name):
-        try:
-            from src.execution import get_executor
-            from src.wp.cli import WPCLI
-            sites = load_sites_config()
-            credentials = load_credentials()
-            site_config = sites.get(site_name)
-            if not site_config or site_config.get("status") != "Ready":
-                return jsonify({"success": False, "data": None, "error": f"Site '{site_name}' is not Ready."}), 400
-            
-            executor = get_executor(site_config, credentials)
-            cli = WPCLI(executor, wp_path=site_config["wp_path"], wp_cli_path=site_config.get("wp_cli_path"))
-            install_res = cli.install_vulnerability_package()
-            if not install_res.success:
-                raw_err = install_res.stderr or install_res.stdout or "Unknown error"
-                clean_err_lines = [l for l in raw_err.splitlines() if not l.strip().startswith("PHP Warning:") and not l.strip().startswith("PHP Notice:")]
-                err_msg = "\n".join(clean_err_lines).strip() or raw_err.strip()
-                return jsonify({"success": False, "data": None, "error": f"Failed to install package: {err_msg}"}), 500
-
-            
-            # Automatically run vulnerability scan after successful installation
-            scan_result = cli.check_vulnerabilities()
-            site_config["last_vulnerability_scan"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            site_config["last_vulnerability_details"] = scan_result
-            if scan_result.get("status") == "success" and scan_result.get("data"):
-                site_config["vulnerability_status"] = "red" if len(scan_result["data"]) > 0 else "green"
-            else:
-                site_config["vulnerability_status"] = "yellow"
-            sites[site_name] = site_config
-            save_sites_config(sites)
-
-            return jsonify({
-                "success": True,
-                "data": {
-                    "install_output": install_res.stdout,
-                    "scan_result": scan_result
-                },
-                "error": None,
-                "timestamp": site_config["last_vulnerability_scan"]
-            })
-
-        except Exception as e:
-            return jsonify({"success": False, "data": None, "error": str(e)}), 500
-
+            return err(str(e), 500)
 
 # Route mappings to SitesController
 sites_bp.route("", methods=["GET"])(SitesController.get_sites)
@@ -753,11 +572,7 @@ sites_bp.route("", methods=["POST"])(SitesController.add_site)
 sites_bp.route("/<site_name>", methods=["PUT"])(SitesController.update_site)
 sites_bp.route("/<site_name>", methods=["DELETE"])(SitesController.delete_site)
 sites_bp.route("/scan", methods=["POST"])(SitesController.scan_sites)
-sites_bp.route("/<site_name>/users", methods=["GET"])(SitesController.list_users)
-sites_bp.route("/<site_name>/users/<user_id>/role", methods=["PUT"])(SitesController.update_user_role)
-sites_bp.route("/<site_name>/users/<user_id>/deactivate", methods=["POST"])(SitesController.deactivate_user)
-sites_bp.route("/<site_name>/users/<user_id>", methods=["DELETE"])(SitesController.delete_user)
-sites_bp.route("/<site_name>/vulnerability-scan", methods=["POST"])(SitesController.run_vulnerability_scan)
-sites_bp.route("/<site_name>/vulnerability-package", methods=["POST"])(SitesController.install_vulnerability_package)
+# User-management and vulnerability-scan endpoints live in users.py /
+# vulnerability.py, mounted on this same /api/sites prefix -- see app.py.
 
 

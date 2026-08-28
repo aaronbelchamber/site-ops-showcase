@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 from src.git.manager import GitManager
 from src.execution.base import CommandResult
 
@@ -15,7 +15,7 @@ def test_git_manager_is_initialized_true(mock_executor):
     mgr = GitManager(site_config, mock_executor)
     
     assert mgr.is_initialized() is True
-    mock_executor.execute.assert_called_with('cd "/var/www/html" && git rev-parse --is-inside-work-tree', timeout=60)
+    mock_executor.execute.assert_called_with('cd /var/www/html && git rev-parse --is-inside-work-tree', timeout=60)
 
 def test_git_manager_is_initialized_false(mock_executor):
     mock_executor.execute.return_value = CommandResult(exit_code=128, stdout="", stderr="Not a git repo", success=False)
@@ -82,6 +82,37 @@ def test_init_repo_workflow(mock_executor):
     assert res["success"] is True
     assert res["status"]["initialized"] is True
     assert res["status"]["branch"] == "main"
+
+@patch("src.git.manager.GitManager._is_windows_local")
+def test_get_cd_prefix_unix(mock_is_windows, mock_executor):
+    mock_is_windows.return_value = False
+    site_config = {"site_name": "test-site", "wp_path": "/var/www/html"}
+    mgr = GitManager(site_config, mock_executor)
+
+    prefix = mgr._get_cd_prefix()
+    # shlex.quote leaves a metacharacter-free path bare.
+    assert prefix == "cd /var/www/html && "
+
+@patch("src.git.manager.GitManager._is_windows_local")
+def test_get_cd_prefix_windows(mock_is_windows, mock_executor):
+    mock_is_windows.return_value = True
+    site_config = {"site_name": "test-site", "wp_path": "C:\\projects\\wordpress"}
+    mgr = GitManager(site_config, mock_executor)
+
+    prefix = mgr._get_cd_prefix()
+    assert prefix == 'cd /d "C:\\projects\\wordpress" && '
+
+@patch("src.git.manager.GitManager._is_windows_local")
+def test_run_git_uses_windows_cd_prefix(mock_is_windows, mock_executor):
+    """A locally-managed Windows site must quote wp_path for cmd.exe, not shlex.quote."""
+    mock_is_windows.return_value = True
+    site_config = {"site_name": "test-site", "wp_path": "C:\\projects\\wordpress"}
+    mgr = GitManager(site_config, mock_executor)
+
+    mgr._run_git("git status")
+    mock_executor.execute.assert_called_with(
+        'cd /d "C:\\projects\\wordpress" && git status', timeout=60
+    )
 
 def test_push_to_github_success(mock_executor):
     mock_executor.execute.side_effect = [

@@ -12,6 +12,7 @@ from src.update.core import CoreUpdater
 from src.update.plugins import PluginUpdater
 from src.update.themes import ThemeUpdater
 from src.git.manager import GitManager
+from src.logging.logger import logger
 
 class UpdateManager:
     def __init__(self, site_config: Dict[str, Any], credentials: Dict[str, Any], executor: BaseExecutor, wp_cli: WPCLI):
@@ -49,8 +50,9 @@ class UpdateManager:
             core_res = self.wp_cli.run_command(["core", "version"])
             if core_res.success and core_res.stdout:
                 versions["core_version"] = core_res.stdout.strip()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Could not capture core version for '{self.site_name}': {e}. "
+                            f"Before/after version diff for this update will be missing core.")
 
         try:
             plugins_res = self.wp_cli.run_command(["plugin", "list", "--fields=name,version"], parse_json=True)
@@ -58,8 +60,9 @@ class UpdateManager:
                 for p in plugins_res.data:
                     if isinstance(p, dict) and "name" in p and "version" in p:
                         versions["plugins"][p["name"]] = p["version"]
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Could not capture plugin versions for '{self.site_name}': {e}. "
+                            f"Before/after version diff for this update will be missing plugins.")
 
         try:
             themes_res = self.wp_cli.run_command(["theme", "list", "--fields=name,version"], parse_json=True)
@@ -67,8 +70,9 @@ class UpdateManager:
                 for t in themes_res.data:
                     if isinstance(t, dict) and "name" in t and "version" in t:
                         versions["themes"][t["name"]] = t["version"]
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Could not capture theme versions for '{self.site_name}': {e}. "
+                            f"Before/after version diff for this update will be missing themes.")
 
         return versions
 
@@ -117,6 +121,17 @@ class UpdateManager:
         with open(self.log_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(record) + "\n")
 
+    def _write_history_best_effort(self, record: Dict[str, Any], original_error: Exception) -> None:
+        """
+        Write a failure record to update history without letting a history-write
+        failure mask the original update failure that's about to be re-raised.
+        """
+        try:
+            self._write_history(record)
+        except Exception as history_err:
+            logger.error(f"Could not write failure record to update history for '{self.site_name}': "
+                          f"{history_err}. The underlying update failure was: {original_error}")
+
     def get_cached_updates_path(self) -> str:
         """Get the path to the cached updates JSON file."""
         return os.path.join(self.updates_log_dir, f"last_check_{self.site_name}.json")
@@ -135,6 +150,7 @@ class UpdateManager:
             try:
                 os.remove(path)
             except Exception:
+                # File already deleted or unreadable; best-effort cleanup. Next cache write will replace it.
                 pass
 
     def update_cache_after_success(self, update_type: str) -> None:
@@ -155,6 +171,7 @@ class UpdateManager:
                     cached_data["plugins"] = data.get("plugins", cached_data["plugins"])
                     cached_data["themes"] = data.get("themes", cached_data["themes"])
             except Exception:
+                # Cache file corrupted or unreadable; best-effort read. Rebuild with defaults and mark current component as clean.
                 pass
                 
         if update_type == "core":
@@ -189,8 +206,9 @@ class UpdateManager:
         time.sleep(1.0)
         try:
             self.cache_manager.clear_all_caches()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Could not clear caches for '{self.site_name}' after update: {e}. "
+                            f"Stale cached content may still be served.")
 
     def update_core(self, major: bool = False, timestamp: Optional[str] = None, create_backup: bool = True, quality_checks: bool = True, bypass_checks: Optional[bool] = None) -> Dict[str, Any]:
         """Perform core update and record history."""
@@ -220,10 +238,7 @@ class UpdateManager:
                 "rollback_triggered": False,
                 "error": str(e)
             }
-            try:
-                self._write_history(fallback_res)
-            except Exception:
-                pass
+            self._write_history_best_effort(fallback_res, e)
             raise e
 
     def update_plugins(self, plugin: Optional[str] = None, timestamp: Optional[str] = None, create_backup: bool = True, quality_checks: bool = True, bypass_checks: Optional[bool] = None) -> Dict[str, Any]:
@@ -254,10 +269,7 @@ class UpdateManager:
                 "rollback_triggered": False,
                 "error": str(e)
             }
-            try:
-                self._write_history(fallback_res)
-            except Exception:
-                pass
+            self._write_history_best_effort(fallback_res, e)
             raise e
 
     def update_themes(self, theme: Optional[str] = None, timestamp: Optional[str] = None, create_backup: bool = True, quality_checks: bool = True, bypass_checks: Optional[bool] = None) -> Dict[str, Any]:
@@ -288,10 +300,7 @@ class UpdateManager:
                 "rollback_triggered": False,
                 "error": str(e)
             }
-            try:
-                self._write_history(fallback_res)
-            except Exception:
-                pass
+            self._write_history_best_effort(fallback_res, e)
             raise e
 
     def update_all(self, create_backup: bool = True, quality_checks: bool = True, bypass_checks: Optional[bool] = None) -> Dict[str, Any]:
@@ -366,10 +375,7 @@ class UpdateManager:
                 "error": str(e),
                 "steps": results
             }
-            try:
-                self._write_history(res)
-            except Exception:
-                pass
+            self._write_history_best_effort(res, e)
             raise e
 
     def get_update_history(self, site_name: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -389,8 +395,8 @@ class UpdateManager:
                 if line:
                     try:
                         history.append(json.loads(line))
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"Skipping corrupted update history line in '{log_file}': {e}")
                         
         # Sort descending by timestamp
         history.sort(key=lambda x: x.get("timestamp", ""), reverse=True)

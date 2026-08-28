@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import api from "../services/api";
 import { showToast } from "../services/toast";
 import { useTaskPolling } from "../hooks/useTaskPolling";
+import { useSitesContext } from "../context/SitesContext";
 import ImageLightbox from "./ImageLightbox";
 import { getDisplayDomain } from "../utils/siteHelpers";
 import {
@@ -54,49 +55,38 @@ function Thumbnails({ siteName, checkId, onEnlarge }) {
     }, [siteName, checkId]);
 
     if (!checkId) {
-        return <span style={{ fontSize: "0.8rem", color: "var(--md-sys-color-outline)" }}>No screenshots yet</span>;
+        return <span className="phd-thumbs-empty">No screenshots yet</span>;
     }
 
     return (
-        <div style={{ display: "flex", gap: "0.5rem" }}>
+        <div className="phd-thumbs-row">
             {[["Desktop", desktopUrl], ["Mobile", mobileUrl]].map(([label, url]) => (
-                <div key={label} style={{ textAlign: "center" }}>
+                <div key={label} className="phd-thumb-col">
                     {url ? (
                         <img
                             src={url}
                             alt={`${label} screenshot`}
                             onClick={() => onEnlarge(url, `${label} - ${siteName}`)}
-                            style={{
-                                width: "90px",
-                                height: "60px",
-                                objectFit: "cover",
-                                objectPosition: "top",
-                                borderRadius: "6px",
-                                border: "1px solid var(--md-sys-color-outline-variant)",
-                                cursor: "zoom-in",
-                            }}
+                            className="phd-thumb-img"
                         />
                     ) : (
-                        <div style={{
-                            width: "90px", height: "60px", borderRadius: "6px",
-                            display: "flex", alignItems: "center", justifyContent: "center",
-                            backgroundColor: "var(--md-sys-color-surface-variant)",
-                            fontSize: "0.65rem", color: "var(--md-sys-color-outline)"
-                        }}>
+                        <div className="phd-thumb-placeholder">
                             n/a
                         </div>
                     )}
-                    <div style={{ fontSize: "0.65rem", color: "var(--md-sys-color-outline)", marginTop: "0.15rem" }}>{label}</div>
+                    <div className="phd-thumb-label">{label}</div>
                 </div>
             ))}
         </div>
     );
 }
 
-function HealthRow({ site, onUpdated, onEnlarge }) {
+function HealthRow({ site, onUpdated, onEnlarge, externallyChecking = false }) {
     const { pollTask } = useTaskPolling();
     const [checking, setChecking] = useState(false);
     const summary = site.health_summary;
+    // A check started by "Check Stale Sites" should show on the row too.
+    const isChecking = checking || externallyChecking;
 
     const runCheck = useCallback(async () => {
         setChecking(true);
@@ -131,11 +121,10 @@ function HealthRow({ site, onUpdated, onEnlarge }) {
 
     return (
         <tr>
-            <td style={{ padding: "0.75rem" }}>
+            <td>
                 <span
-                    className={`status-circle-dot ${getHealthStatusDotClass(summary)}`}
+                    className={`status-circle-dot ${getHealthStatusDotClass(summary)} phd-status-dot-spacing`}
                     title={getHealthCheckedLabel(summary)}
-                    style={{ marginRight: "0.5rem" }}
                 />
                 <strong>{site.display_name || site.site_name}</strong>
                 <div>
@@ -144,55 +133,51 @@ function HealthRow({ site, onUpdated, onEnlarge }) {
                             href={site.health_check_url}
                             target="_blank"
                             rel="noopener noreferrer"
-                            style={{ color: "var(--md-sys-color-primary)", fontSize: "0.85rem" }}
+                            className="phd-site-link"
                         >
                             {getDisplayDomain(site.health_check_url)}
                         </a>
                     ) : (
-                        <span style={{ fontSize: "0.85rem", color: "var(--md-sys-color-outline)" }}>No URL configured</span>
+                        <span className="phd-text-muted-sm">No URL configured</span>
                     )}
                 </div>
             </td>
-            <td style={{ padding: "0.75rem", fontSize: "0.85rem" }}>
+            <td className="phd-td-sm-text">
                 {getHealthCheckedLabel(summary)}
             </td>
-            <td style={{ padding: "0.75rem" }}>
+            <td>
                 {criticalCount === 0 && warningCount === 0 ? (
                     <span className="badge badge-sm badge-success">No active errors</span>
                 ) : (
-                    <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-                        <div style={{ display: "flex", gap: "0.4rem" }}>
+                    <div className="phd-error-col">
+                        <div className="phd-badges-row">
                             {criticalCount > 0 && <span className="badge badge-sm badge-error">{criticalCount} critical</span>}
                             {warningCount > 0 && <span className="badge badge-sm badge-warning">{warningCount} warning</span>}
                         </div>
                         {(summary?.latest_console_errors || []).slice(0, 2).map((e, i) => (
-                            <div key={i} title={e.text} style={{
-                                fontSize: "0.72rem", color: "var(--md-sys-color-outline)",
-                                maxWidth: "260px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"
-                            }}>
+                            <div key={i} title={e.text} className="phd-error-preview">
                                 {e.text}
                             </div>
                         ))}
                     </div>
                 )}
             </td>
-            <td style={{ padding: "0.75rem" }}>
+            <td>
                 <Thumbnails siteName={site.site_name} checkId={summary?.id} onEnlarge={onEnlarge} />
             </td>
-            <td style={{ padding: "0.75rem", whiteSpace: "nowrap" }}>
+            <td className="phd-td-nowrap">
                 <button
                     type="button"
-                    className="md-button md-button-outlined md-button-sm"
+                    className="md-button md-button-outlined md-button-sm phd-check-btn-spacing"
                     onClick={runCheck}
-                    disabled={checking}
-                    style={{ marginBottom: "0.4rem" }}
+                    disabled={isChecking}
                 >
-                    {checking ? (
-                        <span className="material-symbols-outlined" style={{ fontSize: "16px" }}>progress_activity</span>
+                    {isChecking ? (
+                        <span className="material-symbols-outlined spin-icon phd-icon-sm">progress_activity</span>
                     ) : (
-                        <span className="material-symbols-outlined" style={{ fontSize: "16px" }}>refresh</span>
+                        <span className="material-symbols-outlined phd-icon-sm">refresh</span>
                     )}
-                    {" "}Check Site
+                    {" "}{isChecking ? "Checking..." : "Check Site"}
                 </button>
                 <br />
                 {summary?.id && (
@@ -210,35 +195,53 @@ function HealthRow({ site, onUpdated, onEnlarge }) {
 }
 
 export default function ProductionHealthDashboard() {
-    const [sites, setSites] = useState([]);
-    const [loading, setLoading] = useState(true);
+    const sitesContext = useSitesContext();
+    const sites = sitesContext?.sites || [];
+    const [loading, setLoading] = useState(sites.length === 0);
     const [lightboxImage, setLightboxImage] = useState(null);
+    const [checkingSites, setCheckingSites] = useState(() => new Set());
     const staleTimeoutsRef = useRef([]);
+    const { pollTask } = useTaskPolling();
 
+    // GET /api/sites is already fetched app-wide (App.jsx populates
+    // SitesContext right after authentication and keeps it current), so this
+    // view reads from there instead of re-fetching every time it's opened --
+    // it used to refetch on every mount since it's only rendered while this
+    // tab is active.
     const loadSites = useCallback(async () => {
         setLoading(true);
         try {
             const data = await api.getSites();
-            setSites(data || []);
+            sitesContext?.setSites(data || []);
         } catch (err) {
             showToast(`Failed to load sites: ${err.message}`, "error");
         } finally {
             setLoading(false);
         }
-    }, []);
+    }, [sitesContext]);
 
     useEffect(() => {
-        loadSites();
+        // Only fetch if the context hasn't been populated yet (e.g. this view
+        // mounted before App.jsx's post-auth load finished); otherwise the
+        // Refresh button is the only thing that should trigger a fetch here.
+        if (sites.length === 0) {
+            loadSites();
+        } else {
+            setLoading(false);
+        }
         return () => {
             staleTimeoutsRef.current.forEach(clearTimeout);
         };
-    }, [loadSites]);
+        // Intentionally mount-only: re-running this on every `sites` change
+        // would refetch every time patchSiteHealthSummary updates the list.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     const patchSiteHealthSummary = useCallback((siteName, healthSummary) => {
-        setSites((prev) => prev.map((s) => (
+        sitesContext?.setSites((prev) => prev.map((s) => (
             s.site_name === siteName ? { ...s, health_summary: healthSummary } : s
         )));
-    }, []);
+    }, [sitesContext]);
 
     const checkStaleSites = useCallback(() => {
         staleTimeoutsRef.current.forEach(clearTimeout);
@@ -253,7 +256,33 @@ export default function ProductionHealthDashboard() {
         staleSites.forEach((site, index) => {
             const timeoutId = setTimeout(async () => {
                 try {
-                    await api.triggerHealthCheckAsync(site.site_name);
+                    const res = await api.triggerHealthCheckAsync(site.site_name);
+                    // Previously the task id was discarded, so the row kept
+                    // showing a stale timestamp and the button looked inert.
+                    if (res && res.task_id) {
+                        setCheckingSites((prev) => new Set(prev).add(site.site_name));
+                        pollTask(
+                            res.task_id,
+                            `Health check complete for ${site.display_name || site.site_name}`,
+                            (result) => {
+                                setCheckingSites((prev) => {
+                                    const next = new Set(prev);
+                                    next.delete(site.site_name);
+                                    return next;
+                                });
+                                if (result) {
+                                    patchSiteHealthSummary(site.site_name, {
+                                        id: result.id,
+                                        timestamp: result.timestamp,
+                                        overall_status: result.overall_status,
+                                        error_summary: result.checks?.http?.error_summary || {},
+                                        latest_console_errors: (result.checks?.http?.console_errors || [])
+                                            .filter(e => e.severity !== "ignored").slice(0, 3),
+                                    });
+                                }
+                            }
+                        );
+                    }
                 } catch (err) {
                     console.debug("Stale health check trigger failed for", site.site_name, err);
                 }
@@ -262,7 +291,7 @@ export default function ProductionHealthDashboard() {
         });
 
         showToast(`Checking ${staleSites.length} stale site(s), staggered to avoid overload...`, "info");
-    }, [sites]);
+    }, [sites, pollTask, patchSiteHealthSummary]);
 
     const staleCount = sites.filter((s) => isHealthCheckStale(s.health_summary)).length;
 
@@ -289,7 +318,7 @@ export default function ProductionHealthDashboard() {
             {loading ? (
                 <p>Loading sites...</p>
             ) : (
-                <div className="site-table-wrapper" style={{ overflowX: "auto" }}>
+                <div className="phd-table-wrapper">
                     <table className="site-table">
                         <thead>
                             <tr>
@@ -305,6 +334,7 @@ export default function ProductionHealthDashboard() {
                                 <HealthRow
                                     key={site.site_name}
                                     site={site}
+                                    externallyChecking={checkingSites.has(site.site_name)}
                                     onUpdated={patchSiteHealthSummary}
                                     onEnlarge={(src, alt) => setLightboxImage({ src, alt })}
                                 />

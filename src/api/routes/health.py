@@ -1,14 +1,14 @@
-import time
 import os
 import json
 from datetime import datetime, timezone
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, request
 from src.config.loader import load_sites_config, load_credentials, SiteConfigManager
 from src.execution import get_executor
 from src.wp.cli import WPCLI
 from src.health.manager import HealthCheckManager
 from src.api.auth import require_api_key
-from src.api.tasks import start_task, operation_in_progress_response
+from src.api.tasks import start_task, operation_in_progress_response, site_operation
+from src.api.response import ok, err
 from src.logging.logger import logger
 
 health_bp = Blueprint("health", __name__)
@@ -44,7 +44,7 @@ class HealthController:
         try:
             sites = load_sites_config()
             if site_name not in sites:
-                return jsonify({"success": False, "data": None, "error": f"Site '{site_name}' not found.", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 404
+                return err(f"Site '{site_name}' not found.", 404)
 
             is_async = request.args.get("async", "false").lower() == "true"
             if is_async:
@@ -55,27 +55,19 @@ class HealthController:
                 )
                 if task_id is None:
                     return operation_in_progress_response(site_name)
-                return jsonify({
-                    "success": True,
-                    "data": {"task_id": task_id, "status": "running"},
-                    "error": None,
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                })
+                return ok({"task_id": task_id, "status": "running"})
 
-            report = HealthTaskRunner.run_health_check_task(site_name)
-            return jsonify({
-                "success": True,
-                "data": report,
-                "error": None,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            })
+            # The synchronous path does the same real work as the async one
+            # (SSH + a headless browser), so it takes the same per-site lock.
+            # Without it the dashboard could stack one live check per card on
+            # the same site while a background task was already running.
+            with site_operation(site_name) as acquired:
+                if not acquired:
+                    return operation_in_progress_response(site_name)
+                report = HealthTaskRunner.run_health_check_task(site_name)
+                return ok(report)
         except Exception as e:
-            return jsonify({
-                "success": False,
-                "data": None,
-                "error": str(e),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }), 500
+            return err(str(e), 500)
 
     @staticmethod
     @require_api_key
@@ -83,24 +75,14 @@ class HealthController:
         try:
             sites = load_sites_config()
             if site_name not in sites:
-                return jsonify({"success": False, "data": None, "error": f"Site '{site_name}' not found.", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 404
+                return err(f"Site '{site_name}' not found.", 404)
                 
             site_config = sites[site_name]
             mgr = HealthCheckManager(site_config, executor=None, wp_cli=None)
             history = mgr.get_health_history()
-            return jsonify({
-                "success": True,
-                "data": history,
-                "error": None,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            })
+            return ok(history)
         except Exception as e:
-            return jsonify({
-                "success": False,
-                "data": None,
-                "error": str(e),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }), 500
+            return err(str(e), 500)
 
     @staticmethod
     @require_api_key
@@ -108,49 +90,39 @@ class HealthController:
         try:
             sites = load_sites_config()
             if site_name not in sites:
-                return jsonify({"success": False, "data": None, "error": f"Site '{site_name}' not found.", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 404
+                return err(f"Site '{site_name}' not found.", 404)
             
             site_config = sites[site_name]
             mgr = HealthCheckManager(site_config, executor=None, wp_cli=None)
             check = mgr.get_health_check_by_id(check_id)
             if not check:
-                return jsonify({"success": False, "data": None, "error": f"Health check '{check_id}' not found.", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 404
+                return err(f"Health check '{check_id}' not found.", 404)
             
-            return jsonify({
-                "success": True,
-                "data": check,
-                "error": None,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            })
+            return ok(check)
         except Exception as e:
-            return jsonify({
-                "success": False,
-                "data": None,
-                "error": str(e),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }), 500
+            return err(str(e), 500)
 
     @staticmethod
     @require_api_key
     def get_health_screenshot(site_name, check_id, device):
         if device not in ["desktop", "mobile", "desktop_diff", "mobile_diff"]:
-            return jsonify({"success": False, "error": "Invalid device/diff type. Must be 'desktop', 'mobile', 'desktop_diff', or 'mobile_diff'."}), 400
+            return err("Invalid device/diff type. Must be 'desktop', 'mobile', 'desktop_diff', or 'mobile_diff'.", 400)
         
         try:
             from flask import send_from_directory
             sites = load_sites_config()
             if site_name not in sites:
-                return jsonify({"success": False, "error": f"Site '{site_name}' not found."}), 404
+                return err(f"Site '{site_name}' not found.", 404)
             
             site_config = sites[site_name]
             mgr = HealthCheckManager(site_config, executor=None, wp_cli=None)
             check = mgr.get_health_check_by_id(check_id)
             if not check:
-                return jsonify({"success": False, "error": f"Health check '{check_id}' not found."}), 404
+                return err(f"Health check '{check_id}' not found.", 404)
             
             screenshots_meta = check.get("checks", {}).get("http", {}).get("screenshots")
             if not screenshots_meta:
-                return jsonify({"success": False, "error": "No screenshots found for this check."}), 404
+                return err("No screenshots found for this check.", 404)
             
             if device.endswith("_diff"):
                 diffs_meta = check.get("checks", {}).get("http", {}).get("screenshot_diffs", {})
@@ -160,12 +132,12 @@ class HealthController:
                 
             year_month = screenshots_meta.get("year_month")
             if not filename or not year_month:
-                return jsonify({"success": False, "error": "Screenshot/diff metadata is incomplete."}), 404
+                return err("Screenshot/diff metadata is incomplete.", 404)
             
             directory = os.path.join(mgr.screenshots_dir, site_name, year_month)
             return send_from_directory(directory, filename)
         except Exception as e:
-            return jsonify({"success": False, "error": str(e)}), 500
+            return err(str(e), 500)
 
     @staticmethod
     @require_api_key
@@ -173,7 +145,7 @@ class HealthController:
         try:
             sites = load_sites_config()
             if site_name not in sites:
-                return jsonify({"success": False, "data": None, "error": f"Site '{site_name}' not found.", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 404
+                return err(f"Site '{site_name}' not found.", 404)
             
             site_config = sites[site_name]
             mgr = HealthCheckManager(site_config, executor=None, wp_cli=None)
@@ -213,28 +185,14 @@ class HealthController:
                         if is_accepted_diff or any(e.get("suppression_source") == "acknowledged" for e in enriched):
                             data["overall_status"] = "healthy with exception"
 
-                    return jsonify({
-                        "success": True,
-                        "data": data,
-                        "error": None,
-                        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                    })
+                    return ok(data)
                 except Exception:
+                    # Failed to enrich health data; return None (snapshot unavailable)
                     pass
-            
-            return jsonify({
-                "success": True,
-                "data": None,
-                "error": None,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            })
+
+            return ok(None)
         except Exception as e:
-            return jsonify({
-                "success": False,
-                "data": None,
-                "error": str(e),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }), 500
+            return err(str(e), 500)
 
     @staticmethod
     @require_api_key
@@ -243,12 +201,7 @@ class HealthController:
         try:
             sites = load_sites_config()
             if site_name not in sites:
-                return jsonify({
-                    "success": False,
-                    "data": None,
-                    "error": f"Site '{site_name}' not found.",
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                }), 404
+                return err(f"Site '{site_name}' not found.", 404)
             
             site_config = sites[site_name]
             mgr = HealthCheckManager(site_config, executor=None, wp_cli=None)
@@ -268,21 +221,11 @@ class HealthController:
                 import shutil
                 shutil.rmtree(site_screenshots_directory)
                 
-            return jsonify({
-                "success": True,
-                "data": {
+            return ok({
                     "message": f"Health history and screenshots purged for site '{site_name}'."
-                },
-                "error": None,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            })
+                })
         except Exception as e:
-            return jsonify({
-                "success": False,
-                "data": None,
-                "error": str(e),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }), 500
+            return err(str(e), 500)
 
     @staticmethod
     @require_api_key
@@ -291,18 +234,13 @@ class HealthController:
         try:
             sites = load_sites_config()
             if site_name not in sites:
-                return jsonify({"success": False, "data": None, "error": f"Site '{site_name}' not found.", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 404
+                return err(f"Site '{site_name}' not found.", 404)
 
             admin_data = SiteConfigManager.load_admin_data()
             acks = admin_data.get("acknowledged_errors", {}).get(site_name, [])
-            return jsonify({
-                "success": True,
-                "data": acks,
-                "error": None,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            })
+            return ok(acks)
         except Exception as e:
-            return jsonify({"success": False, "data": None, "error": str(e), "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 500
+            return err(str(e), 500)
 
     @staticmethod
     @require_api_key
@@ -314,12 +252,12 @@ class HealthController:
         try:
             sites = load_sites_config()
             if site_name not in sites:
-                return jsonify({"success": False, "data": None, "error": f"Site '{site_name}' not found.", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 404
+                return err(f"Site '{site_name}' not found.", 404)
 
             body = request.get_json(force=True, silent=True) or {}
             fingerprint = (body.get("fingerprint") or "").strip()
             if not fingerprint:
-                return jsonify({"success": False, "data": None, "error": "'fingerprint' is required.", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 400
+                return err("'fingerprint' is required.", 400)
 
             reason = (body.get("reason") or "Acknowledged by operator").strip()
 
@@ -329,12 +267,7 @@ class HealthController:
 
             # Prevent duplicate acknowledgments
             if any(ack.get("fingerprint") == fingerprint for ack in site_acks):
-                return jsonify({
-                    "success": True,
-                    "data": {"message": "Error already acknowledged."},
-                    "error": None,
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                })
+                return ok({"message": "Error already acknowledged."})
 
             site_acks.append({
                 "fingerprint": fingerprint,
@@ -344,14 +277,9 @@ class HealthController:
             SiteConfigManager.save_admin_data(admin_data)
             logger.info(f"Console error '{fingerprint}' acknowledged for site '{site_name}'. Reason: {reason}")
 
-            return jsonify({
-                "success": True,
-                "data": {"message": f"Error '{fingerprint}' acknowledged for site '{site_name}'."},
-                "error": None,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            })
+            return ok({"message": f"Error '{fingerprint}' acknowledged for site '{site_name}'."})
         except Exception as e:
-            return jsonify({"success": False, "data": None, "error": str(e), "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 500
+            return err(str(e), 500)
 
     @staticmethod
     @require_api_key
@@ -360,7 +288,7 @@ class HealthController:
         try:
             sites = load_sites_config()
             if site_name not in sites:
-                return jsonify({"success": False, "data": None, "error": f"Site '{site_name}' not found.", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 404
+                return err(f"Site '{site_name}' not found.", 404)
 
             admin_data = SiteConfigManager.load_admin_data()
             acks_root = admin_data.get("acknowledged_errors", {})
@@ -368,19 +296,14 @@ class HealthController:
 
             updated_acks = [ack for ack in site_acks if ack.get("fingerprint") != fingerprint]
             if len(updated_acks) == len(site_acks):
-                return jsonify({"success": False, "data": None, "error": f"Acknowledgment '{fingerprint}' not found for site '{site_name}'.", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 404
+                return err(f"Acknowledgment '{fingerprint}' not found for site '{site_name}'.", 404)
 
             acks_root[site_name] = updated_acks
             admin_data["acknowledged_errors"] = acks_root
             SiteConfigManager.save_admin_data(admin_data)
-            return jsonify({
-                "success": True,
-                "data": {"message": f"Acknowledgment '{fingerprint}' removed for site '{site_name}'."},
-                "error": None,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            })
+            return ok({"message": f"Acknowledgment '{fingerprint}' removed for site '{site_name}'."})
         except Exception as e:
-            return jsonify({"success": False, "data": None, "error": str(e), "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 500
+            return err(str(e), 500)
 
     @staticmethod
     @require_api_key
@@ -389,18 +312,13 @@ class HealthController:
         try:
             sites = load_sites_config()
             if site_name not in sites:
-                return jsonify({"success": False, "data": None, "error": f"Site '{site_name}' not found.", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 404
+                return err(f"Site '{site_name}' not found.", 404)
 
             admin_data = SiteConfigManager.load_admin_data()
             diffs = admin_data.get("accepted_visual_diffs", {}).get(site_name, [])
-            return jsonify({
-                "success": True,
-                "data": diffs,
-                "error": None,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            })
+            return ok(diffs)
         except Exception as e:
-            return jsonify({"success": False, "data": None, "error": str(e), "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 500
+            return err(str(e), 500)
 
     @staticmethod
     @require_api_key
@@ -409,12 +327,12 @@ class HealthController:
         try:
             sites = load_sites_config()
             if site_name not in sites:
-                return jsonify({"success": False, "data": None, "error": f"Site '{site_name}' not found.", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 404
+                return err(f"Site '{site_name}' not found.", 404)
 
             body = request.get_json(force=True, silent=True) or {}
             check_id = (body.get("check_id") or "").strip()
             if not check_id:
-                return jsonify({"success": False, "data": None, "error": "'check_id' is required.", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 400
+                return err("'check_id' is required.", 400)
 
             reason = (body.get("reason") or "Accepted visual difference").strip()
 
@@ -423,12 +341,7 @@ class HealthController:
             site_diffs: list = diffs_root.setdefault(site_name, [])
 
             if any(item.get("check_id") == check_id for item in site_diffs):
-                return jsonify({
-                    "success": True,
-                    "data": {"message": "Visual diff already accepted."},
-                    "error": None,
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                })
+                return ok({"message": "Visual diff already accepted."})
 
             site_diffs.append({
                 "check_id": check_id,
@@ -438,14 +351,9 @@ class HealthController:
             SiteConfigManager.save_admin_data(admin_data)
             logger.info(f"Visual diff for check '{check_id}' accepted for site '{site_name}'. Reason: {reason}")
 
-            return jsonify({
-                "success": True,
-                "data": {"message": f"Visual diff for check '{check_id}' accepted for site '{site_name}'."},
-                "error": None,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            })
+            return ok({"message": f"Visual diff for check '{check_id}' accepted for site '{site_name}'."})
         except Exception as e:
-            return jsonify({"success": False, "data": None, "error": str(e), "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 500
+            return err(str(e), 500)
 
     @staticmethod
     @require_api_key
@@ -454,7 +362,7 @@ class HealthController:
         try:
             sites = load_sites_config()
             if site_name not in sites:
-                return jsonify({"success": False, "data": None, "error": f"Site '{site_name}' not found.", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 404
+                return err(f"Site '{site_name}' not found.", 404)
 
             admin_data = SiteConfigManager.load_admin_data()
             diffs_root = admin_data.get("accepted_visual_diffs", {})
@@ -462,21 +370,16 @@ class HealthController:
 
             updated_diffs = [item for item in site_diffs if item.get("check_id") != check_id]
             if len(updated_diffs) == len(site_diffs):
-                return jsonify({"success": False, "data": None, "error": f"Accepted visual diff '{check_id}' not found for site '{site_name}'.", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 404
+                return err(f"Accepted visual diff '{check_id}' not found for site '{site_name}'.", 404)
 
             diffs_root[site_name] = updated_diffs
             admin_data["accepted_visual_diffs"] = diffs_root
             SiteConfigManager.save_admin_data(admin_data)
             logger.info(f"Visual diff acceptance for check '{check_id}' removed (re-rejected) for site '{site_name}'.")
 
-            return jsonify({
-                "success": True,
-                "data": {"message": f"Visual diff for check '{check_id}' re-rejected for site '{site_name}'."},
-                "error": None,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            })
+            return ok({"message": f"Visual diff for check '{check_id}' re-rejected for site '{site_name}'."})
         except Exception as e:
-            return jsonify({"success": False, "data": None, "error": str(e), "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 500
+            return err(str(e), 500)
 
 
 # Route mappings to HealthController

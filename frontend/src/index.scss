@@ -1,6 +1,9 @@
 /* WordPress Site Manager - Material Design 3 Inspired Stylesheet */
 @use './styles/tokens' as *;
 @use './styles/mixins' as *;
+@use './styles/health-check-details';
+@use './styles/user-management-tab';
+@use './styles/production-health-dashboard';
 
 @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap');
 
@@ -21,6 +24,8 @@
     --md-sys-color-surface-variant: #E0E2EC;
     --md-sys-color-on-surface-variant: #43474E;
     --md-sys-color-surface-dim: #DAD9DD;
+    --md-sys-color-surface-container: #EFEDF1;
+    --md-sys-color-surface-container-high: #E9E7EC;
     --md-sys-color-on-surface-inverse: #ffffff;
 
     --md-sys-color-background: #F8F9FA;
@@ -40,7 +45,9 @@
     --md-sys-color-success-container: #D1E7DD;
     --md-sys-color-on-success-container: #0F5132;
 
-    --md-sys-color-warning: #B78A00;
+    /* Darkened from #B78A00: paired with white text it measured ~3.0:1, under
+       the 4.5:1 AA floor for the SeverityBadge and other filled warning chips. */
+    --md-sys-color-warning: #8A6800;
     --md-sys-color-on-warning: #ffffff;
     --md-sys-color-warning-container: #FFF3CD;
     --md-sys-color-on-warning-container: #664D03;
@@ -97,6 +104,8 @@
         --md-sys-color-surface-variant: #43474E;
         --md-sys-color-on-surface-variant: #C3C6CF;
         --md-sys-color-surface-dim: #131316;
+        --md-sys-color-surface-container: #1E1F23;
+        --md-sys-color-surface-container-high: #292A2E;
         --md-sys-color-on-surface-inverse: #1A1C1E;
 
         --md-sys-color-background: #0B0E11;
@@ -111,6 +120,7 @@
         --md-sys-color-on-error-container: #FFDAD6;
 
         --md-sys-color-success: #75DD87;
+        --md-sys-color-on-success: #00390F;
         --md-sys-color-success-container: #0F5132;
         --md-sys-color-on-success-container: #D1E7DD;
 
@@ -213,24 +223,12 @@ body {
     margin-bottom: 1.5rem;
 }
 
-.admin-tabs {
-    display: flex;
+/* Layout only -- appearance comes from the shared .md-tabs/.md-tab pair. */
+.admin-tabs,
+.manage-sites-tabs {
     flex-wrap: wrap;
-    gap: 0.5rem;
-    border-bottom: 1px solid var(--md-sys-color-outline-variant);
-    margin-bottom: 1.5rem;
-    padding-bottom: 0.25rem;
 }
 
-.admin-tab {
-    border-radius: 8px 8px 0 0;
-    min-height: 40px;
-}
-
-.admin-tab .material-symbols-outlined {
-    font-size: 1.2rem;
-    margin-right: 0.25rem;
-}
 
 /* Grid & Cards */
 .sites-grid {
@@ -587,12 +585,6 @@ body {
     gap: 0.4rem;
 }
 
-.security-details-card {
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-}
-
 .security-data-section {
     margin-top: 1rem;
 }
@@ -676,10 +668,6 @@ body {
     margin-bottom: 0.5rem;
 }
 
-.md-button-destructive {
-    color: var(--md-sys-color-error);
-}
-
 /* Badges */
 .badge {
     padding: 0.25rem 0.75rem;
@@ -709,9 +697,17 @@ body {
     color: var(--md-sys-color-on-surface-variant);
 }
 
+.badge-info {
+    background-color: var(--md-sys-color-primary-container);
+    color: var(--md-sys-color-on-primary-container);
+}
+
 .badge-clickable {
     border: none;
     font-family: inherit;
+    font-size: inherit;
+    font-weight: inherit;
+    line-height: inherit;
     cursor: pointer;
     transition: filter 0.15s ease-in-out;
 }
@@ -835,12 +831,12 @@ body {
 }
 
 .site-card-default {
-    display: flex !important;
-    flex-direction: column !important;
-    justify-content: space-between !important;
-    gap: 0.85rem !important;
-    padding: 1.25rem !important;
-    height: 100% !important;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: 0.85rem;
+    padding: 1.25rem;
+    height: 100%;
 }
 
 .site-card-default .site-card-thumb {
@@ -882,7 +878,8 @@ body {
     to { transform: rotate(360deg); }
 }
 
-.spin-icon {
+.spin-icon,
+.spin {
     animation: spin 1.2s linear infinite;
 }
 
@@ -899,40 +896,40 @@ body {
 }
 
 .site-card-compact {
-    display: flex !important;
-    flex-direction: column !important;
-    justify-content: space-between !important;
-    gap: 0.65rem !important;
-    padding: 0.85rem 1rem !important;
-    height: 100% !important;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: 0.65rem;
+    padding: 0.85rem 1rem;
+    height: 100%;
 }
 
 .site-card-main {
-    display: flex !important;
-    flex-direction: column !important;
-    justify-content: flex-end !important;
-    flex: 1 !important;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    flex: 1;
 }
 
 .site-card-tags {
-    display: flex !important;
-    flex-wrap: wrap !important;
-    align-content: flex-end !important;
-    align-items: flex-end !important;
-    gap: 0.35rem !important;
-    min-height: 44px !important;
-    margin-top: auto !important;
+    display: flex;
+    flex-wrap: wrap;
+    align-content: flex-end;
+    align-items: flex-end;
+    gap: 0.35rem;
+    min-height: 44px;
+    margin-top: auto;
 }
 
 .card-actions,
 .site-card-actions {
-    display: flex !important;
-    justify-content: flex-end !important;
-    align-items: center !important;
-    margin-top: auto !important;
-    padding-top: 0.5rem !important;
-    border-top: 1px solid var(--md-sys-color-outline-variant) !important;
-    width: 100% !important;
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    margin-top: auto;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--md-sys-color-outline-variant);
+    width: 100%;
 }
 
 /* Details View: Ultra-Compact 34px Row Layout */
@@ -942,6 +939,7 @@ body {
     gap: 0.25rem !important;
 }
 
+/* Row height follows content now that its controls meet the 24px minimum. */
 .site-card-row {
     display: flex !important;
     flex-direction: row !important;
@@ -950,7 +948,6 @@ body {
     gap: 0.5rem !important;
     padding: 0.2rem 0.5rem !important;
     min-height: 34px !important;
-    height: 34px !important;
     border-radius: 5px !important;
     overflow: hidden !important;
     width: 100% !important;
@@ -960,66 +957,66 @@ body {
 }
 
 .site-card-row:hover {
-    transform: none !important;
-    border-color: var(--md-sys-color-primary) !important;
-    background-color: rgba(255, 255, 255, 0.02) !important;
+    transform: none;
+    border-color: var(--md-sys-color-primary);
+    background-color: rgba(255, 255, 255, 0.02);
 }
 
 .site-card-row .row-col-thumb {
-    width: 28px !important;
-    height: 20px !important;
-    flex-shrink: 0 !important;
+    width: 28px;
+    height: 20px;
+    flex-shrink: 0;
 }
 
 .site-card-row .detail-thumb-small {
-    width: 28px !important;
-    height: 20px !important;
-    object-fit: cover !important;
-    border-radius: 2px !important;
-    border: 1px solid var(--md-sys-color-outline-variant) !important;
-    display: block !important;
+    width: 28px;
+    height: 20px;
+    object-fit: cover;
+    border-radius: 2px;
+    border: 1px solid var(--md-sys-color-outline-variant);
+    display: block;
 }
 
 .site-card-row .detail-thumb-placeholder {
-    width: 28px !important;
-    height: 20px !important;
-    border-radius: 2px !important;
-    background: var(--md-sys-color-surface-variant) !important;
-    display: flex !important;
-    align-items: center !important;
-    justify-content: center !important;
+    width: 28px;
+    height: 20px;
+    border-radius: 2px;
+    background: var(--md-sys-color-surface-variant);
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .site-card-row .detail-thumb-placeholder .material-symbols-outlined {
-    font-size: 12px !important;
+    font-size: 12px;
 }
 
 .site-card-row .row-col-title {
-    display: flex !important;
-    align-items: center !important;
-    gap: 0.4rem !important;
-    min-width: 130px !important;
-    max-width: 220px !important;
-    flex-shrink: 0 !important;
-    overflow: hidden !important;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    min-width: 130px;
+    max-width: 220px;
+    flex-shrink: 0;
+    overflow: hidden;
 }
 
 .site-card-row .row-title-text {
-    margin: 0 !important;
-    font-size: 0.8rem !important;
-    font-weight: 600 !important;
-    white-space: nowrap !important;
-    overflow: hidden !important;
-    text-overflow: ellipsis !important;
-    line-height: 1 !important;
+    margin: 0;
+    font-size: 0.8rem;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1;
 }
 
 .site-card-row .row-slug-text {
-    font-size: 0.7rem !important;
-    color: var(--md-sys-color-outline) !important;
-    white-space: nowrap !important;
-    overflow: hidden !important;
-    text-overflow: ellipsis !important;
+    font-size: 0.7rem;
+    color: var(--md-sys-color-outline);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .last-checked-label {
@@ -1029,74 +1026,56 @@ body {
 }
 
 .site-card-row .last-checked-label {
-    font-size: 0.65rem !important;
-    white-space: nowrap !important;
+    font-size: 0.65rem;
+    white-space: nowrap;
 }
 
 .site-card-row .row-col-health {
-    flex-shrink: 0 !important;
+    flex-shrink: 0;
 }
 
 .badge-micro {
-    font-size: 0.65rem !important;
-    padding: 0.05rem 0.35rem !important;
-    height: 16px !important;
-    line-height: 1 !important;
-    border-radius: 3px !important;
-    font-weight: 600 !important;
-    letter-spacing: 0.02em !important;
+    font-size: 0.65rem;
+    /* Was 16px tall while being clickable -- under the 24px WCAG 2.2 minimum.
+       The visual chip stays compact; padding provides the target area. */
+    padding: 0.25rem 0.4rem;
+    min-height: 24px;
+    line-height: 1;
+    border-radius: 3px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
 }
 
 .badge-sm {
-    font-size: 0.65rem !important;
-    padding: 0.05rem 0.35rem !important;
-    height: 16px !important;
-    line-height: 1 !important;
-    border-radius: 3px !important;
-    white-space: nowrap !important;
-    display: inline-flex !important;
-    align-items: center !important;
-    flex-shrink: 0 !important;
+    font-size: 0.65rem;
+    padding: 0.05rem 0.35rem;
+    height: 16px;
+    line-height: 1;
+    border-radius: 3px;
+    white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
 }
 
 .site-card-row .row-col-badges {
-    display: flex !important;
-    align-items: center !important;
-    gap: 0.25rem !important;
-    flex: 1 !important;
-    flex-wrap: nowrap !important;
-    white-space: nowrap !important;
-    overflow: hidden !important;
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    flex: 1;
+    flex-wrap: nowrap;
+    white-space: nowrap;
+    overflow: hidden;
 }
 
 .site-card-row .row-col-actions {
-    display: flex !important;
-    align-items: center !important;
-    gap: 0.2rem !important;
-    flex-shrink: 0 !important;
-    margin-left: auto !important;
-}
-
-.btn-micro {
-    padding: 0.1rem 0.4rem !important;
-    font-size: 0.68rem !important;
-    height: 22px !important;
-    border-radius: 3px !important;
-    display: inline-flex !important;
-    align-items: center !important;
-    justify-content: center !important;
-    gap: 0.2rem !important;
-}
-
-.btn-xs {
-    padding: 0.15rem 0.35rem;
-    font-size: 0.72rem;
-    height: 24px;
-    border-radius: 4px;
-    display: inline-flex;
+    display: flex;
     align-items: center;
-    justify-content: center;
+    gap: 0.2rem;
+    flex-shrink: 0;
+    margin-left: auto;
 }
+
 
 .btn-xs .material-symbols-outlined {
     font-size: 14px;
@@ -1162,6 +1141,72 @@ body {
     padding: 0;
     border-radius: 50%;
     justify-content: center;
+}
+
+/* Compressed button for the dense row view. Must stay after .md-button,
+   whose padding/radius/font-size it overrides at equal specificity. */
+.btn-micro {
+    padding: 0.2rem 0.5rem;
+    font-size: 0.68rem;
+    min-height: 24px;
+    border-radius: 3px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.2rem;
+}
+
+
+/* Filled destructive button — used for irreversible actions (delete user,
+   confirm delete) so they never read as ordinary outlined buttons. */
+.md-button-error {
+    background-color: var(--md-sys-color-error);
+    color: var(--md-sys-color-on-error);
+}
+
+.md-button-error:hover {
+    filter: brightness(1.1);
+}
+
+/* Compact button size shared by table rows, card headers and toolbars. */
+.md-button-sm,
+.btn-sm {
+    font-size: 0.75rem;
+    padding: 0.25rem 0.7rem;
+    gap: 0.3rem;
+}
+
+.md-button-sm .material-symbols-outlined,
+.btn-sm .material-symbols-outlined {
+    font-size: 16px;
+}
+
+/* Borderless icon-only affordance for inline secondary actions
+   (refresh a panel, dismiss a banner). */
+.btn-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--md-sys-color-on-surface-variant);
+    cursor: pointer;
+    font-family: inherit;
+    transition: var(--md-sys-transition-default);
+}
+
+.btn-icon:hover {
+    background-color: var(--md-sys-color-surface-variant);
+    color: var(--md-sys-color-on-surface);
+}
+
+.btn-icon:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
 }
 
 /* Form Styles */
@@ -1230,56 +1275,6 @@ body {
 
 .modal-overlay.active .modal-content {
     transform: translateY(0);
-}
-
-.modal-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 1.5rem;
-}
-
-.modal-header h3 {
-    font-size: 1.5rem;
-    font-weight: 500;
-}
-
-.modal-footer {
-    display: flex;
-    justify-content: flex-end;
-    gap: 0.75rem;
-    margin-top: 2rem;
-}
-
-/* Status Log / Timeline */
-.timeline {
-    position: relative;
-    padding-left: 2rem;
-    border-left: 2px solid var(--md-sys-color-outline-variant);
-    display: flex;
-    flex-direction: column;
-    gap: 1.5rem;
-}
-
-.timeline-item {
-    position: relative;
-}
-
-.timeline-item::before {
-    content: '';
-    position: absolute;
-    left: -2.35rem;
-    top: 0.25rem;
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    background-color: var(--md-sys-color-primary);
-    border: 2px solid var(--md-sys-color-surface);
-}
-
-.timeline-time {
-    font-size: 0.75rem;
-    color: var(--md-sys-color-outline);
 }
 
 /* Toasts */
@@ -1479,27 +1474,13 @@ body {
     }
 }
 
-.modal-state-copy {
-    margin-top: 0.75rem;
-    color: var(--md-sys-color-outline);
-    font-size: 0.9rem;
-}
-
-.modal-state-title {
-    margin-top: 0.5rem;
-    font-weight: 600;
-}
-
 .modal-footer {
     display: flex;
     justify-content: flex-end;
+    gap: 0.75rem;
     margin-top: 1rem;
     padding-top: 0.75rem;
     border-top: 1px solid var(--md-sys-color-outline-variant);
-}
-
-.badge-neutral-profile {
-    text-transform: none;
 }
 
 /* Form Grid & Column Layouts */
@@ -1576,17 +1557,6 @@ body {
     margin: 0.25rem 0 0 0;
 }
 
-.manage-sites-tabs {
-    display: flex;
-    gap: 0.5rem;
-    margin-bottom: 1.5rem;
-    border-bottom: 2px solid var(--md-sys-color-outline-variant);
-}
-
-.tab-button {
-    border-radius: 8px 8px 0 0;
-    padding: 0.6rem 1.25rem;
-}
 
 .scan-toolbar-panel {
     display: flex;
@@ -1699,14 +1669,6 @@ body {
     padding: 3rem 1rem;
 }
 
-.tab-button-active {
-    background-color: var(--md-sys-color-surface);
-}
-
-.tab-button-passive {
-    background-color: transparent;
-    color: var(--md-sys-color-outline);
-}
 
 .site-group-card {
     border: 1px solid var(--md-sys-color-outline-variant);
@@ -1764,18 +1726,6 @@ body {
     color: var(--md-sys-color-outline);
 }
 
-.compact-button {
-    font-size: 0.8rem;
-    padding: 0.3rem 0.75rem;
-}
-
-.site-table-wrapper {
-    border: 1px solid var(--md-sys-color-outline-variant);
-    border-radius: 10px;
-    overflow: hidden;
-    background-color: var(--md-sys-color-surface);
-}
-
 .site-table {
     width: 100%;
     border-collapse: collapse;
@@ -1784,16 +1734,6 @@ body {
 .site-table thead tr {
     background-color: var(--md-sys-color-surface);
     border-bottom: 1px solid var(--md-sys-color-outline-variant);
-}
-
-.site-table th,
-.site-table td {
-    padding: 0.75rem;
-}
-
-.site-table th {
-    font-size: 0.85rem;
-    text-align: left;
 }
 
 .site-table th.center,
@@ -1810,10 +1750,6 @@ body {
     font-size: 0.825rem;
     font-family: monospace;
     color: var(--md-sys-color-on-surface-variant);
-}
-
-.site-table-row {
-    border-bottom: 1px solid var(--md-sys-color-outline-variant);
 }
 
 .site-table-row--imported {
@@ -1850,17 +1786,6 @@ body {
     width: 110px;
 }
 
-.site-table-name {
-    font-size: 0.95rem;
-    display: block;
-}
-
-.site-table-meta,
-.site-table-muted {
-    font-size: 0.75rem;
-    color: var(--md-sys-color-outline);
-}
-
 .site-table-code {
     font-size: 0.825rem;
     font-family: monospace;
@@ -1872,15 +1797,6 @@ body {
     color: var(--md-sys-color-on-surface-variant);
     font-size: 0.75rem;
     margin-top: 0.2rem;
-}
-
-.site-status-badge {
-    font-size: 0.75rem;
-    padding: 0.25rem 0.6rem;
-}
-
-.compact-disabled {
-    opacity: 0.5;
 }
 
 .site-link {
@@ -1931,108 +1847,10 @@ body {
     color: var(--md-sys-color-outline);
 }
 
-.action-button-group {
-    display: flex;
-    justify-content: flex-end;
-    gap: 0.4rem;
-    flex-wrap: wrap;
-}
-
-.action-button-icon {
-    font-size: 1rem;
-}
-
 .md-button-danger {
     color: var(--md-sys-color-error, #b00020);
 }
 
-/* Modal Layout Helpers */
-.modal-backdrop {
-    position: fixed;
-    inset: 0;
-    background-color: rgba(0, 0, 0, 0.6);
-    backdrop-filter: blur(4px);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 1000;
-}
-
-.modal-card {
-    background-color: var(--md-sys-color-surface);
-    padding: 1.5rem;
-    border-radius: 12px;
-    max-width: 900px;
-    width: 95%;
-    max-height: 88vh;
-    overflow-y: auto;
-    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.3);
-}
-
-.modal-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    margin-bottom: 1rem;
-    border-bottom: 1px solid var(--md-sys-color-outline-variant);
-    padding-bottom: 1rem;
-}
-
-.modal-title-row {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-}
-
-.modal-title-icon {
-    font-size: 1.75rem;
-    color: var(--md-sys-color-primary);
-}
-
-.modal-title {
-    margin: 0;
-    font-size: 1.25rem;
-}
-
-.modal-subtitle {
-    margin-top: 0.25rem;
-    font-size: 0.85rem;
-    color: var(--md-sys-color-outline);
-}
-
-.modal-close-button {
-    padding: 0.4rem 0.6rem;
-}
-
-.modal-toolbar-panel {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-    background-color: var(--md-sys-color-surface-variant);
-    padding: 1rem;
-    border-radius: 8px;
-    margin-bottom: 1.25rem;
-}
-
-.modal-toolbar-row {
-    display: flex;
-    gap: 0.75rem;
-    flex-wrap: wrap;
-    align-items: center;
-}
-
-.modal-toolbar-field {
-    flex: 1;
-    min-width: 200px;
-}
-
-.modal-toolbar-fieldwide {
-    flex: 1.5;
-    min-width: 220px;
-}
-
-.modal-toolbar-field label,
-.modal-filter-group label,
 .configured-filter-label,
 .scan-toolbar-label {
     font-size: 0.75rem;
@@ -2042,112 +1860,13 @@ body {
     color: var(--md-sys-color-on-surface-variant);
 }
 
-.modal-toolbar-action {
-    align-self: flex-end;
-}
-
-.modal-filter-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-    padding-top: 0.5rem;
-    border-top: 1px dashed var(--md-sys-color-outline-variant);
-}
-
-.modal-filter-group {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    flex: 1;
-    min-width: 240px;
-}
-
-.modal-filter-icon {
-    font-size: 1.1rem;
-    color: var(--md-sys-color-outline);
-}
-
-.modal-filter-status {
-    font-size: 0.75rem;
-    color: var(--md-sys-color-outline);
-}
-
-.modal-state-panel {
-    text-align: center;
-    padding: 2.5rem 1rem;
-}
-
-.modal-state-empty {
-    background-color: var(--md-sys-color-surface-variant);
-    border-radius: 8px;
-}
-
-.modal-state-icon {
-    font-size: 3rem;
-    color: var(--md-sys-color-outline);
-}
-
-.scan-group-card {
-    border: 1px solid var(--md-sys-color-outline-variant);
-    border-radius: 8px;
-    margin-bottom: 1.25rem;
-    overflow: hidden;
-    background-color: var(--md-sys-color-surface);
-}
-
-.scan-group-header {
-    background-color: var(--md-sys-color-surface-variant);
-    padding: 0.75rem 1rem;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-}
-
-.scan-group-meta {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-}
-
-.scan-group-icon {
-    color: var(--md-sys-color-primary);
-}
-
-.scan-group-title {
-    font-size: 0.95rem;
-}
-
-.scan-group-subtitle,
-.scan-group-info,
 .site-table-muted,
 .site-table-meta {
     font-size: 0.75rem;
     color: var(--md-sys-color-on-surface-variant);
 }
 
-.scan-group-actions {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    flex-wrap: wrap;
-}
-
-.scan-group-info {
-    color: var(--md-sys-color-outline);
-}
-
-.scan-group-button {
-    font-size: 0.75rem;
-    padding: 0.25rem 0.6rem;
-}
-
-.site-table-wrapper,
-.modal-table-wrapper {
+.site-table-wrapper {
     border: 1px solid var(--md-sys-color-outline-variant);
     border-radius: 10px;
     overflow: hidden;
@@ -2197,22 +1916,11 @@ body {
     display: block;
 }
 
-.site-table-link {
-    font-size: 0.75rem;
-    color: var(--md-sys-color-primary);
-    text-decoration: none;
-}
-
 .site-table-code,
 .site-table-path {
     font-size: 0.825rem;
     font-family: monospace;
     color: var(--md-sys-color-on-surface-variant);
-}
-
-.site-status-badge {
-    font-size: 0.75rem;
-    padding: 0.25rem 0.6rem;
 }
 
 .action-button-group {
@@ -2244,90 +1952,6 @@ body {
     padding: 0.25rem 0.6rem;
 }
 
-.site-action-cell {
-    text-align: right;
-}
-
-.site-action-row {
-    display: flex;
-    justify-content: flex-end;
-    gap: 0.4rem;
-}
-
-.site-action-row button {
-    font-size: 0.75rem;
-    padding: 0.25rem 0.5rem;
-}
-
-.site-action-row button[disabled] {
-    opacity: 0.5;
-}
-
-.filter-toolbar {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 1rem;
-    background-color: var(--md-sys-color-surface-variant);
-    padding: 1rem 1.25rem;
-    border-radius: 10px;
-    margin-bottom: 1.25rem;
-}
-
-.filter-group,
-.filter-search-row {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    flex: 1;
-    min-width: 260px;
-}
-
-.filter-input,
-.filter-select,
-.search-input {
-    flex: 1;
-    padding: 0.45rem 0.65rem;
-    border-radius: 6px;
-    border: 1px solid var(--md-sys-color-outline);
-    font-size: 0.9rem;
-    background-color: var(--md-sys-color-surface);
-}
-
-.filter-label {
-    font-size: 0.85rem;
-    font-weight: 600;
-    color: var(--md-sys-color-on-surface-variant);
-}
-
-.loading-panel {
-    text-align: center;
-    padding: 3rem;
-}
-
-.configured-table-wrapper {
-    border: 1px solid var(--md-sys-color-outline-variant);
-    border-radius: 10px;
-    overflow: hidden;
-    background-color: var(--md-sys-color-surface);
-}
-
-.configured-table {
-    width: 100%;
-    border-collapse: collapse;
-}
-
-.configured-table th,
-.configured-table td {
-    padding: 0.75rem;
-}
-
-.configured-table th {
-    font-size: 0.85rem;
-    text-align: left;
-}
-
 .configured-table th.center,
 .configured-table td.center {
     text-align: center;
@@ -2336,31 +1960,6 @@ body {
 .configured-table th.right,
 .configured-table td.right {
     text-align: right;
-}
-
-.configured-code {
-    font-size: 0.75rem;
-    color: var(--md-sys-color-outline);
-}
-
-.configured-status-badge {
-    font-size: 0.75rem;
-    padding: 0.25rem 0.6rem;
-}
-
-.configured-action-row {
-    display: flex;
-    justify-content: flex-end;
-    gap: 0.4rem;
-}
-
-.configured-action-row button {
-    font-size: 0.75rem;
-    padding: 0.25rem 0.5rem;
-}
-
-.configured-action-row button.tonal-error {
-    color: var(--md-sys-color-error, #b00020);
 }
 
 .compact {
@@ -2857,10 +2456,6 @@ body {
     50% { opacity: 0.5; }
 }
 
-.animate-pulse {
-    animation: pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-}
-
 /* Button Disabled Styling */
 .md-button:disabled, .md-button[disabled] {
     background-color: var(--md-sys-color-surface-variant) !important;
@@ -2868,12 +2463,59 @@ body {
     border-color: var(--md-sys-color-outline-variant) !important;
     cursor: not-allowed !important;
     opacity: 0.6 !important;
-    pointer-events: none !important;
+    /* No pointer-events:none here. It suppressed the native title tooltip on
+       disabled controls -- and for a permanently disabled control like the
+       "Ready" status pill, that tooltip is the only place the reason is
+       explained. The disabled attribute already blocks activation. */
 }
 
 
+/* ==========================================
+   Focus visibility
+   ==========================================
+   Only .badge-clickable used to define a focus style, so buttons, tabs and
+   the help accordions were entirely invisible to keyboard users. */
+:focus-visible {
+    outline: 2px solid var(--md-sys-color-primary);
+    outline-offset: 2px;
+    border-radius: 2px;
+}
+
+.md-button:focus-visible,
+.md-tab:focus-visible,
+.btn-icon:focus-visible,
+.status-toggle-pill:focus-visible,
+.help-accordion summary:focus-visible {
+    outline: 2px solid var(--md-sys-color-primary);
+    outline-offset: 2px;
+}
+
+/* The accordion summary explicitly cleared its outline. */
+.help-accordion summary {
+    outline: revert;
+}
+
+/* ==========================================
+   Reduced motion
+   ==========================================
+   Four infinite animations plus a transform on every card hover. */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+    }
+
+    .md-card:hover {
+        transform: none;
+    }
+}
+
 /* Material Design 3 Navigation Tabs */
-.tabs-nav {
+.md-tabs {
     display: flex;
     gap: 0.5rem;
     border-bottom: 2px solid var(--md-sys-color-surface-variant);
@@ -2917,6 +2559,321 @@ body {
     font-size: 1.2rem;
 }
 
+/* ==========================================
+   Layout primitives & inline banners
+   ========================================== */
+
+.app-wrapper {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Generic routed-view wrapper (detail, add/edit, admin). */
+.view {
+    display: block;
+}
+
+/* Column of stacked cards inside .form-grid. */
+.form-column {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+}
+
+.site-details-top-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.site-details-header-thumb {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    border-radius: 4px;
+}
+
+/* Slug beneath a card title. The row layout has .row-slug-text; this is the
+   grid/compact equivalent so both card modes read the same.
+   Scoped to .card-title to outrank the generic `.card-title span` rule, which
+   otherwise forces these back to 0.875rem body text. */
+.card-title .site-slug,
+.site-slug {
+    display: block;
+    font-size: 0.72rem;
+    font-family: $font-family-mono;
+    color: var(--md-sys-color-outline);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.card-title .last-checked-label {
+    font-size: 0.7rem;
+    color: var(--md-sys-color-outline);
+}
+
+.site-health-badge {
+    flex-shrink: 0;
+    align-self: flex-start;
+}
+
+/* Inline banners (e.g. "Cache Cleared" after an update run). */
+.alert {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    border-radius: var(--md-sys-shape-corner-small);
+    border-left: 4px solid var(--md-sys-color-outline);
+    background-color: var(--md-sys-color-surface-variant);
+    color: var(--md-sys-color-on-surface-variant);
+    font-size: 0.875rem;
+}
+
+.alert-info {
+    border-left-color: var(--md-sys-color-primary);
+    background-color: var(--md-sys-color-primary-container);
+    color: var(--md-sys-color-on-primary-container);
+}
+
+.alert-success {
+    border-left-color: var(--md-sys-color-success);
+    background-color: var(--md-sys-color-success-container);
+    color: var(--md-sys-color-on-success-container);
+}
+
+.alert-warning {
+    border-left-color: var(--md-sys-color-warning);
+    background-color: var(--md-sys-color-warning-container);
+    color: var(--md-sys-color-on-warning-container);
+}
+
+.alert-error {
+    border-left-color: var(--md-sys-color-error);
+    background-color: var(--md-sys-color-error-container);
+    color: var(--md-sys-color-on-error-container);
+}
+
+/* Base table used where a component isn't on the .site-table layout. */
+.md-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.md-table th,
+.md-table td {
+    padding: 0.75rem;
+    text-align: left;
+}
+
+.md-table th {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--md-sys-color-on-surface-variant);
+    border-bottom: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.md-table tbody tr {
+    border-bottom: 1px solid var(--md-sys-color-outline-variant);
+}
+
+/* Error boundary fallback panel */
+.error-boundary-panel {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 0.75rem;
+    padding: 3rem 2rem;
+    margin: 2rem auto;
+    max-width: 640px;
+    border: 1px solid var(--md-sys-color-error);
+    border-radius: var(--md-sys-shape-corner-medium);
+    background-color: var(--md-sys-color-error-container);
+    color: var(--md-sys-color-on-error-container);
+}
+
+.error-boundary-icon {
+    font-size: 3rem;
+    color: var(--md-sys-color-error);
+}
+
+.error-boundary-title {
+    margin: 0;
+    font-size: 1.25rem;
+    font-weight: 600;
+}
+
+.error-boundary-copy {
+    margin: 0;
+    font-size: 0.9rem;
+}
+
+.error-boundary-details {
+    width: 100%;
+    max-height: 160px;
+    overflow: auto;
+    padding: 0.75rem;
+    border-radius: var(--md-sys-shape-corner-small);
+    background-color: var(--md-sys-color-surface);
+    color: var(--md-sys-color-on-surface);
+    font-family: $font-family-mono;
+    font-size: 0.75rem;
+    text-align: left;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.error-boundary-actions {
+    display: flex;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    justify-content: center;
+    margin-top: 0.5rem;
+}
+
+
+/* ==========================================
+   Two-column content splits
+   ==========================================
+   These were inline `gridTemplateColumns: "2fr 1fr"` styles, which no media
+   query could reach -- on a phone the narrow column collapsed to ~90px. */
+.split-2-1 {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: 1.5rem;
+    align-items: start;
+}
+
+.split-2-1 > * {
+    min-width: 0; /* let grid children shrink instead of overflowing */
+}
+
+@media (max-width: 900px) {
+    .split-2-1 {
+        grid-template-columns: 1fr;
+    }
+}
+
+.stack-column {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+    min-width: 0;
+}
+
+
+/* ==========================================
+   Confirmation dialog
+   ==========================================
+   Replaces window.confirm() for destructive actions -- see hooks/useConfirm. */
+.confirm-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 3000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    background-color: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(3px);
+}
+
+.confirm-dialog {
+    width: 100%;
+    max-width: 460px;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    padding: 1.5rem;
+    border-radius: var(--md-sys-shape-corner-medium);
+    background-color: var(--md-sys-color-surface);
+    color: var(--md-sys-color-on-surface);
+    border: 1px solid var(--md-sys-color-outline-variant);
+    box-shadow: var(--md-sys-elevation-3);
+}
+
+.confirm-dialog--destructive {
+    border-color: var(--md-sys-color-error);
+}
+
+.confirm-dialog-header {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+}
+
+.confirm-dialog-icon {
+    font-size: 1.6rem;
+    color: var(--md-sys-color-primary);
+}
+
+.confirm-dialog--destructive .confirm-dialog-icon {
+    color: var(--md-sys-color-error);
+}
+
+.confirm-dialog-title {
+    margin: 0;
+    font-size: 1.1rem;
+    font-weight: 600;
+}
+
+.confirm-dialog-message {
+    margin: 0;
+    font-size: 0.9rem;
+    line-height: 1.5;
+    color: var(--md-sys-color-on-surface-variant);
+    white-space: pre-line;
+}
+
+.confirm-dialog-details {
+    margin: 0;
+    padding: 0.6rem 0.75rem;
+    max-height: 160px;
+    overflow: auto;
+    border-radius: var(--md-sys-shape-corner-small);
+    background-color: var(--md-sys-color-surface-variant);
+    color: var(--md-sys-color-on-surface-variant);
+    font-family: $font-family-mono;
+    font-size: 0.75rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.confirm-dialog-typed {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    font-size: 0.85rem;
+}
+
+.confirm-dialog-extra {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    font-size: 0.85rem;
+}
+
+.confirm-dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.75rem;
+    padding-top: 0.25rem;
+}
+
+@media (max-width: 600px) {
+    .confirm-dialog-actions {
+        flex-direction: column-reverse;
+    }
+
+    .confirm-dialog-actions .md-button {
+        justify-content: center;
+    }
+}
+
 /* Responsive Grid for Update Items */
 .update-items-grid {
     display: grid;
@@ -2939,6 +2896,5 @@ body {
         grid-template-columns: 1fr;
     }
 }
-
 
 

@@ -1,0 +1,302 @@
+// ==========================================
+// HealthCheckDetails.jsx
+// ==========================================
+// Extracted from ~103 inline style={{...}} props (B9 remediation). Class
+// names are scoped with an hcd- prefix since these are specific to this
+// component's layout, not general-purpose utilities.
+@use './tokens' as *;
+
+// --- Generic layout helpers (flex row/col + gap), local to this component ---
+.hcd-row {
+    display: flex;
+    align-items: center;
+}
+
+.hcd-row-start {
+    display: flex;
+    align-items: flex-start;
+}
+
+.hcd-col {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.hcd-wrap { flex-wrap: wrap; }
+.hcd-justify-between { justify-content: space-between; }
+.hcd-flex-1 { flex: 1; min-width: 0; }
+.hcd-shrink-0 { flex-shrink: 0; }
+.hcd-m0 { margin: 0; }
+.hcd-mt-1r { margin-top: $space-4; }
+.hcd-mb-4 { margin: 0 0 $space-4 0; }
+
+// Compound (.md-card.hcd-xxx) selectors below are deliberate, not
+// stylistic: @use partials compile before the rest of index.scss (a hard
+// Sass ordering rule), so a lone-class override here would lose the
+// cascade tie against a same-specificity .md-card rule declared later in
+// the file. The compound selector's higher specificity wins regardless
+// of source order -- verify with a compiled-CSS check if you touch these.
+.md-card.hcd-card-pad { padding: $space-6; }
+
+.hcd-gap-xs { gap: 0.4rem; }
+.hcd-gap-sm { gap: $space-2; }
+.hcd-gap-md { gap: $space-3; }
+.hcd-gap-lg { gap: $space-4; }
+.hcd-gap-xl { gap: $space-5; }
+
+.hcd-text-muted {
+    font-size: 0.875rem;
+    color: var(--md-sys-color-outline);
+}
+
+.hcd-text-error {
+    color: var(--md-sys-color-error);
+}
+
+.hcd-empty-success {
+    display: flex;
+    align-items: center;
+    gap: $space-2;
+    color: var(--md-sys-color-success);
+}
+
+// --- SeverityBadge ---
+.hcd-badge {
+    padding: 0.15rem 0.55rem;
+    border-radius: $radius-pill;
+    font-size: 0.7rem;
+    font-weight: bold;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    flex-shrink: 0;
+}
+.hcd-badge--critical { background-color: var(--md-sys-color-error); color: var(--md-sys-color-on-error); }
+.hcd-badge--warning { background-color: var(--md-sys-color-warning); color: var(--md-sys-color-on-warning); }
+.hcd-badge--ignored { background-color: var(--md-sys-color-outline); color: var(--md-sys-color-on-surface-inverse); }
+
+// --- SuppressionLabel ---
+.hcd-suppression-label {
+    font-size: 0.72rem;
+    color: var(--md-sys-color-outline);
+    font-style: italic;
+}
+
+// --- Small/extra-small compact buttons (reused across cards) ---
+// Compound with .md-button: its own font-size/padding would otherwise win
+// the cascade tie (see note above on .md-card compounds -- same cause).
+.md-button.hcd-btn-sm { font-size: 0.8rem; padding: 0.3rem 0.9rem; }
+.md-button.hcd-btn-xs { font-size: 0.78rem; padding: 0.25rem 0.75rem; }
+
+// --- AcknowledgeForm ---
+.hcd-ack-form {
+    margin-top: $space-3;
+    padding: $space-3;
+    background-color: var(--md-sys-color-surface-variant);
+    border-radius: $radius-sm;
+    display: flex;
+    flex-direction: column;
+    gap: $space-2;
+}
+.hcd-ack-form__label {
+    font-size: 0.8rem;
+    color: var(--md-sys-color-outline);
+}
+.hcd-ack-form__input {
+    padding: 0.4rem $space-3;
+    border-radius: $radius-sm;
+    border: 1px solid var(--md-sys-color-outline-variant);
+    background: var(--md-sys-color-surface);
+    color: var(--md-sys-color-on-surface);
+    font-size: 0.875rem;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+// --- ConsoleErrorCard ---
+.hcd-error-card {
+    border-radius: $radius-xs;
+    padding: $space-4;
+    overflow: hidden;
+}
+.hcd-error-card--muted { opacity: 0.75; }
+.hcd-error-card--critical { background-color: var(--md-sys-color-error-container); border-left: 4px solid var(--md-sys-color-error); }
+.hcd-error-card--warning { background-color: var(--md-sys-color-warning-container); border-left: 4px solid var(--md-sys-color-warning); }
+.hcd-error-card--ignored { background-color: var(--md-sys-color-surface-dim); border-left: 4px solid var(--md-sys-color-outline-variant); }
+
+.hcd-error-card__message {
+    font-family: monospace;
+    font-weight: bold;
+    color: var(--md-sys-color-on-surface-variant);
+    word-break: break-word;
+    overflow-wrap: anywhere;
+}
+.hcd-error-card__message--critical { color: var(--md-sys-color-error); }
+.hcd-error-card__message--warning { color: var(--md-sys-color-warning); }
+
+.hcd-error-card__location {
+    margin-top: 0.35rem;
+    font-size: 0.75rem;
+    color: var(--md-sys-color-outline);
+    font-family: monospace;
+    word-break: break-all;
+    overflow-wrap: anywhere;
+}
+.hcd-error-card__id {
+    margin-top: 0.25rem;
+    font-size: 0.72rem;
+    color: var(--md-sys-color-outline);
+    font-family: monospace;
+}
+.hcd-error-card__suppression-wrap { margin-top: 0.35rem; }
+.hcd-error-card__local-error {
+    margin-top: $space-2;
+    font-size: 0.8rem;
+    color: var(--md-sys-color-error);
+}
+
+// --- AssetIssuesSection ---
+.hcd-asset-issue-heading {
+    font-weight: 600;
+    font-size: 0.875rem;
+    margin-bottom: $space-2;
+    color: var(--md-sys-color-error);
+}
+.hcd-asset-issue-item {
+    font-size: 0.8rem;
+    font-family: monospace;
+    padding: $space-2 $space-3;
+    background-color: var(--md-sys-color-error-container);
+    color: var(--md-sys-color-on-error-container);
+    border-radius: $radius-sm;
+    word-break: break-all;
+}
+
+// --- ConsoleErrorsSection ---
+.hcd-count { font-weight: 600; font-size: 0.875rem; }
+.hcd-count--critical { color: var(--md-sys-color-error); }
+.hcd-count--warning { color: var(--md-sys-color-warning); }
+.hcd-count--ignored { color: var(--md-sys-color-outline); }
+
+.hcd-ignored-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.85rem;
+    color: var(--md-sys-color-outline);
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 0.25rem 0;
+    margin-bottom: 0;
+}
+.hcd-ignored-toggle--open { margin-bottom: $space-3; }
+.hcd-ignored-toggle__icon {
+    font-size: 1.1rem;
+    transition: transform 0.2s;
+    transform: rotate(0deg);
+}
+.hcd-ignored-toggle__icon--open { transform: rotate(90deg); }
+
+// --- Main component: page shell ---
+.hcd-page-pad { padding-bottom: $space-12; }
+.hcd-loading { padding: $space-8; text-align: center; }
+.hcd-loading__subtext { margin-top: $space-4; color: var(--md-sys-color-outline); }
+.md-card.hcd-fetch-error-card { padding: $space-8; margin: $space-8 auto; max-width: 600px; }
+
+.hcd-domain-link { color: var(--md-sys-color-primary); font-weight: 500; }
+
+// Status badge / explanation banner colour by overall_status -- replaces a
+// per-render JS lookup (statusBadgeColor) with modifier classes.
+.hcd-status-badge {
+    color: var(--md-sys-color-on-surface-inverse);
+    padding: $space-2 $space-4;
+    border-radius: $radius-pill;
+    font-weight: bold;
+    font-size: 0.875rem;
+    text-transform: uppercase;
+    cursor: pointer;
+    user-select: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+}
+.hcd-status-badge__arrow { font-size: 16px; }
+.hcd-status-badge--healthy { background-color: var(--md-sys-color-success); }
+.hcd-status-badge--critical { background-color: var(--md-sys-color-error); }
+.hcd-status-badge--degraded { background-color: var(--md-sys-color-warning); }
+.hcd-status-badge--notice { background-color: var(--md-sys-color-primary); }
+
+.md-card.hcd-explain-card {
+    padding: 1.25rem $space-6;
+    background-color: var(--md-sys-color-surface-variant);
+}
+.md-card.hcd-explain-card--healthy { border-left: 5px solid var(--md-sys-color-success); }
+.md-card.hcd-explain-card--critical { border-left: 5px solid var(--md-sys-color-error); }
+.md-card.hcd-explain-card--degraded { border-left: 5px solid var(--md-sys-color-warning); }
+.md-card.hcd-explain-card--notice { border-left: 5px solid var(--md-sys-color-primary); }
+.hcd-explain-card__header { display: flex; align-items: center; gap: $space-2; margin-bottom: $space-2; }
+.hcd-explain-card__icon--healthy { color: var(--md-sys-color-success); }
+.hcd-explain-card__icon--critical { color: var(--md-sys-color-error); }
+.hcd-explain-card__icon--degraded { color: var(--md-sys-color-warning); }
+.hcd-explain-card__icon--notice { color: var(--md-sys-color-primary); }
+.hcd-explain-card__title { font-size: 1rem; }
+.hcd-explain-card__list {
+    margin: 0;
+    padding-left: 1.25rem;
+    color: var(--md-sys-color-on-surface-variant);
+    font-size: 0.9rem;
+}
+.hcd-explain-card__list-item { margin-bottom: 0.25rem; }
+.hcd-explain-card__text {
+    margin: 0;
+    font-size: 0.9rem;
+    color: var(--md-sys-color-on-surface-variant);
+}
+
+// --- Screenshot panels (captured + visual diff) ---
+.hcd-screenshot-frame {
+    border: 1px solid var(--md-sys-color-outline-variant);
+    border-radius: $radius-md;
+    overflow: hidden;
+    background-color: #000;
+    min-height: 200px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.hcd-screenshot-frame img {
+    width: 100%;
+    height: auto;
+    display: block;
+    cursor: zoom-in;
+}
+.hcd-screenshot-frame__empty { color: #aaa; }
+
+.md-card.hcd-diff-card--accepted { border: 1px solid var(--md-sys-color-primary); background-color: rgba(0, 160, 255, 0.02); }
+.md-card.hcd-diff-card--rejected { border: 1px solid var(--md-sys-color-error); background-color: rgba(255, 0, 128, 0.02); }
+.hcd-diff-card__header { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: $space-4; margin-bottom: $space-4; }
+.hcd-diff-card__title { display: flex; align-items: center; gap: $space-2; margin: 0; }
+.hcd-diff-card__title--accepted { color: var(--md-sys-color-primary); }
+.hcd-diff-card__title--rejected { color: var(--md-sys-color-error); }
+.hcd-diff-card__subtitle { font-size: 0.875rem; color: var(--md-sys-color-outline); margin: 0.35rem 0 0 0; }
+.hcd-diff-card__actions { display: flex; align-items: center; gap: $space-3; }
+.hcd-diff-card__reject-btn { border-color: var(--md-sys-color-error); color: var(--md-sys-color-error); }
+
+// --- HTTP metrics grid ---
+.md-card.hcd-metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: $space-6;
+    padding: $space-6;
+}
+.hcd-metric-label { color: var(--md-sys-color-outline); font-size: 0.875rem; }
+.hcd-metric-value { font-size: 2rem; font-weight: bold; }
+.hcd-metric-value--good { color: var(--md-sys-color-success); }
+.hcd-metric-value--bad { color: var(--md-sys-color-error); }
+.hcd-metric-value--muted { color: var(--md-sys-color-outline); }
+
+// --- Console errors card header ---
+.hcd-console-errors-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: $space-4; flex-wrap: wrap; gap: $space-2; }
+.hcd-console-errors-suppressed-note { font-size: 0.8rem; color: var(--md-sys-color-outline); font-style: italic; }

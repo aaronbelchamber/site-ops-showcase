@@ -1,10 +1,24 @@
 import React, { useState } from "react";
 import api from "../services/api";
 import { showToast } from "../services/toast";
+import { useConfirm } from "../hooks/useConfirm";
 
 export default function SecurityScanTab({ site, onScanComplete }) {
     const [scanning, setScanning] = useState(false);
     const [installing, setInstalling] = useState(false);
+    const { confirm, confirmDialog } = useConfirm();
+
+    // Rendered from the parent's already-loaded site record; guard so a missing
+    // or not-yet-loaded site degrades to an empty state instead of crashing.
+    if (!site) {
+        return (
+            <div className="security-empty-state">
+                <span className="material-symbols-outlined security-empty-state-icon">security</span>
+                <p>Site configuration is not available yet.</p>
+            </div>
+        );
+    }
+
     const vulnDetails = site.last_vulnerability_details;
 
     const handleRunScan = async () => {
@@ -22,7 +36,12 @@ export default function SecurityScanTab({ site, onScanComplete }) {
     };
 
     const handleInstallPackage = async () => {
-        if (!window.confirm(`Do you want to install the WP-CLI vulnerability scanner package on ${site.display_name}?`)) {
+        const ok = await confirm({
+            title: "Install vulnerability scanner?",
+            message: `The WP-CLI vulnerability scanner package will be installed on ${site.display_name}.`,
+            confirmLabel: "Install",
+        });
+        if (!ok) {
             return;
         }
 
@@ -49,6 +68,7 @@ export default function SecurityScanTab({ site, onScanComplete }) {
 
     return (
         <div className="security-scan-root">
+            {confirmDialog}
             <div className="md-card security-status-card">
                 <div className="security-status-row">
                     <div>

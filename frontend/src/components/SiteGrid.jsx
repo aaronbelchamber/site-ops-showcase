@@ -1,7 +1,7 @@
 import React from "react";
 import SiteCard from "./SiteCard";
 
-export default function SiteGrid({ sites, loading, onViewDetails, onAddSiteClick, viewMode = "grid" }) {
+export default function SiteGrid({ sites, loading, onViewDetails, onAddSiteClick, onRequestCheck, viewMode = "grid" }) {
     if (loading) {
         return (
             <div style={{ display: "grid", gridColumn: "1/-1", textAlign: "center", color: "var(--md-sys-color-outline)", padding: "3rem 0" }}>
@@ -44,6 +44,7 @@ export default function SiteGrid({ sites, loading, onViewDetails, onAddSiteClick
                     site={site}
                     viewMode={viewMode}
                     onViewDetails={onViewDetails}
+                    onRequestCheck={onRequestCheck}
                 />
             ))}
         </div>

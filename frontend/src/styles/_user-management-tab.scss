@@ -1,0 +1,45 @@
+// ==========================================
+// UserManagementTab.jsx
+// ==========================================
+// Extracted from 28 inline style={{...}} props (B9 remediation).
+@use './tokens' as *;
+
+.umt-loading { padding: $space-4; }
+.umt-root { margin-top: $space-4; }
+.umt-m0 { margin: 0; }
+.umt-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: $space-4; }
+.umt-meta { font-size: 0.85rem; color: var(--md-sys-color-outline); }
+
+// Compound (.md-table.umt-table) selectors: @use partials compile before
+// the rest of index.scss (a hard Sass ordering rule), so a lone-class
+// override here would lose the cascade tie against a same-specificity
+// .md-table th/td rule declared later in the file -- .md-table's default
+// 0.75rem padding would silently win over this component's 0.5rem.
+.md-table.umt-table {
+    width: 100%;
+    border-collapse: collapse;
+
+    th {
+        text-align: left;
+        padding: $space-2;
+    }
+
+    tbody tr {
+        border-bottom: 1px solid var(--md-sys-color-outline-variant);
+    }
+
+    td {
+        padding: $space-2;
+    }
+}
+
+.umt-actions-cell { display: flex; gap: $space-2; }
+// Compound with .md-button: its own font-size/padding would otherwise win
+// the cascade tie against a lone .umt-btn-xs (same @use-ordering cause as
+// the .md-table.umt-table note above).
+.md-button.umt-btn-xs { font-size: 0.75rem; padding: 0.25rem $space-2; }
+.umt-role-select { padding: 0.25rem $space-2; border-radius: $radius-xs; }
+
+// Reassign-target dropdown rendered inside the shared useConfirm dialog's
+// renderExtra slot (see UserManagementTab's delete confirmation).
+.umt-modal-select { width: 100%; padding: $space-2; }

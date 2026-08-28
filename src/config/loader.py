@@ -1,5 +1,7 @@
+import copy
 import os
 import re
+import threading
 import yaml
 import json
 from urllib.parse import urlparse
@@ -169,6 +171,7 @@ class SiteConfigManager:
                     netloc = parsed.netloc or parsed.path
                     domain = netloc
                 except Exception:
+                    # URL parse failed; fall back to using ssh_host
                     pass
             if not domain:
                 ssh_host = config.get("ssh_host")
@@ -242,11 +245,12 @@ class SiteConfigManager:
                     if "admin_notes" in admin_data:
                         del admin_data["admin_notes"]
                         cls.save_admin_data(admin_data)
-                        
+
                     return admin_notes
             except Exception:
+                # Legacy format load failed; return empty (new .txt file will be created on save)
                 pass
-                
+
         return ""
 
     @classmethod
@@ -303,6 +307,7 @@ class SiteConfigManager:
                             )
                             continue
                         except Exception:
+                            # Fallback validation also failed; will raise original error below
                             pass
                     raise ValueError(f"Configuration validation failed for site '{site_name}': {e}")
                     
@@ -342,6 +347,7 @@ class SiteConfigManager:
                         )
                         continue
                     except Exception:
+                        # Fallback validation also failed; will raise original error below
                         pass
                 raise ValueError(f"Configuration validation failed for JSON site '{site_name}': {e}")
                 
@@ -394,27 +400,86 @@ class SiteConfigManager:
             
         return resolved_sites
 
+    # Decrypting credentials.enc costs one PBKDF2 derivation (100k iterations,
+    # ~120ms). load_sites_config() alone used to trigger 2N+1 of them, because
+    # SiteConfigModel's validator re-read the store twice per site -- a 5-site
+    # GET /api/sites spent ~2.5s, 95% of the request, deriving the same key over
+    # and over. The plaintext is cached in memory and invalidated by the file's
+    # identity (mtime + size), plus explicitly on save.
+    _credentials_cache_lock = threading.Lock()
+    _credentials_cache_stamp = None
+    _credentials_cache_data = None
+
+    @classmethod
+    def _credentials_file_stamp(cls):
+        """Identity of credentials.enc on disk, or None if it is unreadable."""
+        try:
+            st = os.stat(CREDENTIALS_ENC_PATH)
+            return (st.st_mtime_ns, st.st_size)
+        except OSError:
+            return None
+
+    @classmethod
+    def invalidate_credentials_cache(cls) -> None:
+        """Drop the cached plaintext credentials (called after every write)."""
+        with cls._credentials_cache_lock:
+            cls._credentials_cache_stamp = None
+            cls._credentials_cache_data = None
+
     @classmethod
     def load_raw_credentials(cls) -> Dict[str, Any]:
         """
         Decrypt and load the raw dictionary directly from credentials.enc.
+
+        Returns a deep copy: several callers mutate the result in place, and the
+        cache must not be corrupted by them.
         """
         if not os.path.exists(CREDENTIALS_ENC_PATH):
             return {}
-            
+
+        stamp = cls._credentials_file_stamp()
+        if stamp is not None:
+            with cls._credentials_cache_lock:
+                if cls._credentials_cache_stamp == stamp and cls._credentials_cache_data is not None:
+                    return copy.deepcopy(cls._credentials_cache_data)
+
         encryption_key = cls.get_encryption_key()
         with open(CREDENTIALS_ENC_PATH, "rb") as f:
             encrypted_bytes = f.read()
-            
+
         if not encrypted_bytes:
             return {}
-            
+
         try:
-            return CredentialEncryptor.decrypt_credentials(encrypted_bytes, encryption_key)
+            decrypted = CredentialEncryptor.decrypt_credentials(encrypted_bytes, encryption_key)
         except Exception as e:
             import logging
             logging.getLogger("app").warning(f"Failed to decrypt credentials: {e}. Falling back to empty configuration.")
             return {}
+
+        # Migrate files written before the versioned (iterations-embedded)
+        # format existed: they decrypted fine just now at LEGACY_PBKDF2_ITERATIONS,
+        # so re-encrypt at the current PBKDF2_ITERATIONS while we still have the
+        # plaintext. This is what lets PBKDF2_ITERATIONS be raised later without
+        # locking operators out of a credentials.enc written under the old value.
+        if CredentialEncryptor.is_legacy_format(encrypted_bytes):
+            try:
+                cls.save_credentials(decrypted)
+                import logging
+                logging.getLogger("app").info(
+                    "Migrated credentials.enc to the current PBKDF2 iteration count."
+                )
+                stamp = cls._credentials_file_stamp()
+            except Exception as e:
+                import logging
+                logging.getLogger("app").warning(f"Failed to migrate credentials.enc to the current format: {e}")
+
+        if stamp is not None:
+            with cls._credentials_cache_lock:
+                cls._credentials_cache_stamp = stamp
+                cls._credentials_cache_data = copy.deepcopy(decrypted)
+
+        return decrypted
 
     @classmethod
     def load_credentials(cls) -> Dict[str, Dict[str, Any]]:
@@ -454,9 +519,13 @@ class SiteConfigManager:
         
         # Ensure credentials directory exists
         os.makedirs(os.path.dirname(CREDENTIALS_ENC_PATH), exist_ok=True)
-        
+
         with open(CREDENTIALS_ENC_PATH, "wb") as f:
             f.write(encrypted_bytes)
+
+        # The file changed underneath the cache; drop it so the next read
+        # re-derives rather than serving stale plaintext.
+        cls.invalidate_credentials_cache()
 
     @classmethod
     def save_sites_config(cls, sites: Dict[str, Any]) -> None:
@@ -518,4 +587,5 @@ load_raw_credentials = SiteConfigManager.load_raw_credentials
 load_credentials = SiteConfigManager.load_credentials
 save_credentials = SiteConfigManager.save_credentials
 mask_credential_keys = SiteConfigManager.mask_credential_keys
+invalidate_credentials_cache = SiteConfigManager.invalidate_credentials_cache
 

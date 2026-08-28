@@ -1,20 +1,22 @@
 import React, { useState, useEffect } from "react";
 import api from "../services/api";
 import { showToast } from "../services/toast";
+import { useConfirm } from "../hooks/useConfirm";
 
 export default function AddSiteForm({ siteToEdit, siteNameFromUrl, cloneFrom, onCancel, onSuccess, onDeleteSuccess, onManageProfiles }) {
+    const { confirm, confirmDialog } = useConfirm();
     const isCloneMode = !!cloneFrom || (siteToEdit && siteToEdit.isClone);
     const isEditMode = (!!siteToEdit || !!siteNameFromUrl) && !isCloneMode;
 
     const [siteName, setSiteName] = useState("");
     const [displayName, setDisplayName] = useState("");
     const [healthCheckUrl, setHealthCheckUrl] = useState("");
-    const [includeMedia, setIncludeMedia] = useState(false);
+    // Matches the new-site reset below, which sets this true; the old initial
+    // value of false made the checkbox visibly flip after mount.
+    const [includeMedia, setIncludeMedia] = useState(true);
 
     const [sshHost, setSshHost] = useState("");
     const [sshUser, setSshUser] = useState("");
-    const [sshPassword, setSshPassword] = useState("");
-    const [sshPrivateKey, setSshPrivateKey] = useState("");
 
     const [wpPath, setWpPath] = useState("");
     const [dbHost, setDbHost] = useState("localhost");
@@ -59,11 +61,10 @@ export default function AddSiteForm({ siteToEdit, siteNameFromUrl, cloneFrom, on
                 ssh_user: sshUser,
                 wp_path: wpPath
             };
-            const credentials = {
-                ssh_password: sshPassword,
-                ssh_private_key: sshPrivateKey
-            };
-            const result = await api.testConnection(siteConfig, credentials);
+            // Credentials are resolved server-side from the selected profile
+            // (or the site's stored credentials) -- the form has no fields for
+            // them.
+            const result = await api.testConnection(siteConfig, {});
             setStatus("Ready");
             showToast(`Connection successful! Status set to Ready. (${result.wp_path_status})`, "success");
         } catch (error) {
@@ -103,8 +104,6 @@ export default function AddSiteForm({ siteToEdit, siteNameFromUrl, cloneFrom, on
                     setSelectedCredentialProfile(site.credential_profile || "");
                     setSshHost(site.ssh_host || "");
                     setSshUser(site.ssh_user || "");
-                    setSshPassword(""); // Keep blank
-                    setSshPrivateKey(site.ssh_private_key || "");
                     setWpPath(site.wp_path || "");
                     setDbHost(site.db_host || "localhost");
                     setDbName(site.db_name || "");
@@ -122,8 +121,6 @@ export default function AddSiteForm({ siteToEdit, siteNameFromUrl, cloneFrom, on
                 setSelectedCredentialProfile("");
                 setSshHost("");
                 setSshUser("");
-                setSshPassword("");
-                setSshPrivateKey("");
                 setWpPath("");
                 setDbHost("localhost");
                 setDbName("");
@@ -159,8 +156,6 @@ export default function AddSiteForm({ siteToEdit, siteNameFromUrl, cloneFrom, on
             domain: domain || null
         };
 
-        if (sshPassword) payload.ssh_password = sshPassword;
-        if (sshPrivateKey) payload.ssh_private_key = sshPrivateKey;
         if (dbPassword) payload.db_password = dbPassword;
 
         if (isCloneMode && cloneCredentialsFrom) {
@@ -191,11 +186,16 @@ export default function AddSiteForm({ siteToEdit, siteNameFromUrl, cloneFrom, on
     const handleDeleteSite = async () => {
         const activeSiteName = siteNameFromUrl || siteToEdit?.site_name;
         if (!activeSiteName) return;
-        if (
-            confirm(
-                `Are you absolutely sure you want to delete and unmonitor site '${activeSiteName}'?\nThis will remove it from the Sites list and delete sensitive credentials. Backups on this manager will NOT be deleted, but config files will.`
-            )
-        ) {
+        // The Danger Zone checkbox already gates this button; the dialog
+        // restates exactly what is destroyed, and requires the slug typed.
+        const ok = await confirm({
+            title: "Delete and unmonitor this site?",
+            message: `"${activeSiteName}" will be removed from the Sites list and its stored credentials deleted. Backups already taken by this manager are kept, but its configuration files are removed.`,
+            requireTyped: activeSiteName,
+            confirmLabel: "Delete site",
+            destructive: true,
+        });
+        if (ok) {
             try {
                 await api.deleteSite(activeSiteName);
                 showToast("Site unmonitored.", "success");
@@ -210,6 +210,7 @@ export default function AddSiteForm({ siteToEdit, siteNameFromUrl, cloneFrom, on
 
     return (
         <div id="addSiteView" className="view">
+            {confirmDialog}
             <div className="page-title-section">
                 <div className="page-title-heading">
                     <button type="button" className="md-button md-button-tonal" onClick={onCancel}>
@@ -410,14 +411,10 @@ export default function AddSiteForm({ siteToEdit, siteNameFromUrl, cloneFrom, on
                                             if (profile) {
                                                 setSshHost(profile.ssh_host || "");
                                                 setSshUser(profile.ssh_user || "");
-                                                setSshPrivateKey(profile.ssh_private_key || "");
-                                                setSshPassword("");
                                             }
                                         } else {
                                             setSshHost("");
                                             setSshUser("");
-                                            setSshPrivateKey("");
-                                            setSshPassword("");
                                         }
                                     }}
                                 >

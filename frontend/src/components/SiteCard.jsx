@@ -3,172 +3,79 @@ import api from "../services/api";
 import { showToast } from "../services/toast";
 import { useSitesContext } from "../context/SitesContext";
 import {
-    getDaysSinceLastUpdateCheck,
     getLastCheckedLabel as getLastCheckedLabelFor,
     getUpdateStalenessTooltip as getUpdateStalenessTooltipFor,
     getStatusDotClass as getStatusDotClassFor,
+    getUpdateTierBadgeClass,
+    getUpdateTierSuffix,
     getHealthBadgeClass,
 } from "../utils/siteStaleness";
 
-export default function SiteCard({ site, viewMode = "grid", onViewDetails }) {
+export default function SiteCard({ site, viewMode = "grid", onViewDetails, onRequestCheck }) {
     const sitesContext = useSitesContext();
     const contextUpdates = sitesContext?.updatesBySite?.[site.site_name];
     const isCheckingUpdates = Boolean(sitesContext?.inFlightChecks?.has(site.site_name));
 
-    const [healthStatus, setHealthStatus] = useState("Loading");
-    const [loadingHealth, setLoadingHealth] = useState(false);
-    const [latestCheckId, setLatestCheckId] = useState(null);
-    const [latestSnapshot, setLatestSnapshot] = useState(null);
+    // GET /api/sites already returns `health_summary` (id, timestamp,
+    // overall_status) and `update_summary` for every site, so the card renders
+    // from props alone.
+    //
+    // This card used to fire three requests per site on mount -- health history,
+    // latest snapshot and an update check -- and two of those fell back to
+    // api.runHealthCheck(), the *synchronous* endpoint that opens SSH and drives
+    // a headless browser. A dashboard of N sites launched up to 2N live checks
+    // at once, which saturated the backend (cascading 409s, then SSH banner
+    // timeouts). The only per-card request left is the screenshot image itself,
+    // which needs an authenticated blob fetch.
+    const healthSummary = site.health_summary || null;
+    const latestCheckId = healthSummary?.id || null;
     const [updateInfo, setUpdateInfo] = useState(contextUpdates || site.update_summary || null);
     const [screenshotUrl, setScreenshotUrl] = useState(null);
-    const [capturingSnapshot, setCapturingSnapshot] = useState(false);
 
-    // Sync from context when context updates
+    // Sync from context when a background update check reports back
     useEffect(() => {
         if (contextUpdates) {
             setUpdateInfo(contextUpdates);
         }
     }, [contextUpdates]);
 
-    const fetchHealth = async (forceCheck = false) => {
-        setLoadingHealth(true);
-        if (forceCheck) {
-            setHealthStatus("CHECKING...");
-        }
-        try {
-            let report;
-            if (forceCheck) {
-                report = await api.runHealthCheck(site.site_name);
-                if (report && report.id) {
-                    setLatestCheckId(report.id);
-                }
-                showToast(`Health check complete for ${site.display_name}`, "success");
-            } else {
-                const history = await api.getHealthHistory(site.site_name);
-                if (history && history.length > 0) {
-                    report = history[0];
-                } else {
-                    report = await api.runHealthCheck(site.site_name);
-                }
-            }
-
-            const statusVal = report ? (report.overall_status || report.status) : null;
-            if (statusVal) {
-                const lower = statusVal.toLowerCase();
-                if (lower === "healthy with exception") {
-                    setHealthStatus("HEALTHY*");
-                } else {
-                    setHealthStatus(statusVal.toUpperCase());
-                }
-            } else {
-                setHealthStatus("UNKNOWN");
-            }
-        } catch (error) {
-            console.error("Health check failed:", error);
-            setHealthStatus("ERROR");
-        } finally {
-            setLoadingHealth(false);
-        }
-    };
-
-    useEffect(() => {
-        fetchHealth(false);
-    }, [site.site_name, site.status]);
-
-    // Auto-backfill screenshot flow if snapshot or screenshot missing
-    useEffect(() => {
-        let cancelled = false;
-        const fetchSnapshot = async () => {
-            try {
-                let snapshot = await api.getLatestSnapshot(site.site_name);
-                const hasDesktopScreenshot = snapshot?.checks?.http?.screenshots?.desktop && snapshot?.id;
-
-                if (!snapshot || !hasDesktopScreenshot) {
-                    if (!cancelled) setCapturingSnapshot(true);
-                    try {
-                        const report = await api.runHealthCheck(site.site_name);
-                        if (report && report.id) {
-                            snapshot = report;
-                        } else {
-                            snapshot = await api.getLatestSnapshot(site.site_name);
-                        }
-                    } catch (e) {
-                        console.debug("Auto backfill health check failed for", site.site_name, e);
-                    } finally {
-                        if (!cancelled) setCapturingSnapshot(false);
-                    }
-                }
-
-                if (!cancelled && snapshot) {
-                    setLatestSnapshot(snapshot);
-                }
-            } catch (error) {
-                console.debug("No snapshot available for", site.site_name, error);
-            }
-        };
-        fetchSnapshot();
-        return () => { cancelled = true; };
-    }, [site.site_name]);
-
+    // Keep local state in step when the parent reloads the site list
     useEffect(() => {
         if (site.update_summary) {
-            setUpdateInfo(site.update_summary);
-            if (sitesContext?.setSiteUpdates) {
-                sitesContext.setSiteUpdates(site.site_name, site.update_summary);
-            }
+            setUpdateInfo((prev) => prev || site.update_summary);
         }
-        const fetchUpdatesInfo = async () => {
-            try {
-                const data = await api.checkUpdates(site.site_name, false);
-                if (data) {
-                    setUpdateInfo(data);
-                    if (sitesContext?.setSiteUpdates) {
-                        sitesContext.setSiteUpdates(site.site_name, data);
-                    }
-                }
-            } catch (error) {
-                console.debug("No cached update info available for", site.site_name, error);
-            }
-        };
-        if (!contextUpdates) {
-            fetchUpdatesInfo();
-        }
-    }, [site.site_name, site.update_summary]);
+    }, [site.update_summary]);
 
-    // Load screenshot via authenticated blob request
+    // Load the screenshot for the most recent check via an authenticated request
     useEffect(() => {
         let cancelled = false;
         let createdUrl = null;
 
-        const loadScreenshotBlob = async () => {
-            if (latestSnapshot?.checks?.http?.screenshots?.desktop && latestSnapshot?.id) {
-                try {
-                    const blob = await api.getScreenshotBlob(site.site_name, latestSnapshot.id, "desktop");
-                    if (!cancelled) {
-                        createdUrl = URL.createObjectURL(blob);
-                        setScreenshotUrl(createdUrl);
-                    }
-                } catch (e) {
-                    console.debug("Failed to load screenshot blob for", site.site_name, e);
-                    if (!cancelled) setScreenshotUrl(null);
+        if (!latestCheckId) {
+            setScreenshotUrl(null);
+            return undefined;
+        }
+
+        (async () => {
+            try {
+                const blob = await api.getScreenshotBlob(site.site_name, latestCheckId, "desktop");
+                if (!cancelled) {
+                    createdUrl = URL.createObjectURL(blob);
+                    setScreenshotUrl(createdUrl);
                 }
-            } else {
+            } catch (e) {
+                console.debug("No screenshot for", site.site_name, e);
                 if (!cancelled) setScreenshotUrl(null);
             }
-        };
-
-        loadScreenshotBlob();
+        })();
 
         return () => {
             cancelled = true;
-            if (createdUrl) {
-                URL.revokeObjectURL(createdUrl);
-            }
+            if (createdUrl) URL.revokeObjectURL(createdUrl);
         };
-    }, [latestSnapshot, site.site_name]);
+    }, [site.site_name, latestCheckId]);
 
     // Staleness calculations
-    const daysSinceCheck = getDaysSinceLastUpdateCheck(updateInfo);
     const getLastCheckedLabel = () => getLastCheckedLabelFor(updateInfo);
     const getUpdateStalenessTooltip = () => getUpdateStalenessTooltipFor(updateInfo);
     const getStatusDotClass = () => getStatusDotClassFor(updateInfo);
@@ -203,9 +110,9 @@ export default function SiteCard({ site, viewMode = "grid", onViewDetails }) {
 
         const tooltipText = getUpdateStalenessTooltip();
 
-        if (!updateInfo || daysSinceCheck === Infinity) {
+        if (!updateInfo || !updateInfo.timestamp) {
             return (
-                <span className="badge badge-sm badge-lowercase badge-stale-orange" title={tooltipText}>updates unchecked</span>
+                <span className="badge badge-sm badge-lowercase badge-error" title={tooltipText}>updates unchecked</span>
             );
         }
 
@@ -213,32 +120,24 @@ export default function SiteCard({ site, viewMode = "grid", onViewDetails }) {
         const pluginsCount = updateInfo.plugins?.plugins?.length ?? 0;
         const themesCount = updateInfo.themes?.themes?.length ?? 0;
 
-        const getBadgeClassForComponent = (hasUpdate) => {
-            if (hasUpdate) return "badge-warning";
-            if (daysSinceCheck > 30) return "badge-stale-orange";
-            if (daysSinceCheck > 7) return "badge-stale-yellow";
-            return "badge-success";
-        };
+        // An available update is a warning regardless of age; otherwise the
+        // badge reflects how old the check itself is, on the shared scale that
+        // also drives the status dot and the dashboard chip.
+        const staleBadgeClass = getUpdateTierBadgeClass(updateInfo);
+        const staleSuffix = getUpdateTierSuffix(updateInfo);
+        const getBadgeClassForComponent = (hasUpdate) => (hasUpdate ? "badge-warning" : staleBadgeClass);
 
         const getLabel = (type, countOrAvail) => {
             if (type === "Core") {
-                if (countOrAvail) return "core update";
-                if (daysSinceCheck > 30) return "core stale (>30d)";
-                if (daysSinceCheck > 7) return "core stale (>7d)";
-                return "core ok";
+                return countOrAvail ? "core update" : `core ${staleSuffix}`;
             }
             if (type === "Plugins") {
-                if (countOrAvail > 0) return `plugins (${countOrAvail})`;
-                if (daysSinceCheck > 30) return "plugins stale (>30d)";
-                if (daysSinceCheck > 7) return "plugins stale (>7d)";
-                return "plugins ok";
+                return countOrAvail > 0 ? `plugins (${countOrAvail})` : `plugins ${staleSuffix}`;
             }
             if (type === "Themes") {
-                if (countOrAvail > 0) return `themes (${countOrAvail})`;
-                if (daysSinceCheck > 30) return "themes stale (>30d)";
-                if (daysSinceCheck > 7) return "themes stale (>7d)";
-                return "themes ok";
+                return countOrAvail > 0 ? `themes (${countOrAvail})` : `themes ${staleSuffix}`;
             }
+            return "";
         };
 
         return (
@@ -256,8 +155,25 @@ export default function SiteCard({ site, viewMode = "grid", onViewDetails }) {
         );
     };
 
-    const healthDisplay = latestSnapshot?.overall_status ? latestSnapshot.overall_status.toUpperCase() : healthStatus;
+    const rawStatus = healthSummary?.overall_status || "";
+    const healthDisplay = rawStatus
+        ? (rawStatus.toLowerCase() === "healthy with exception" ? "HEALTHY*" : rawStatus.toUpperCase())
+        : "NOT CHECKED";
     const healthBadgeClass = getHealthBadgeClass(healthDisplay);
+    const healthTitle = healthDisplay === "HEALTHY*"
+        ? "Healthy with Exceptions: All functional checks passed, but visual diffs or console errors were accepted by an admin."
+        : latestCheckId
+            ? "Click to view latest health check details"
+            : "No health check has been run for this site yet. Click to open site details.";
+
+    const openLatestReport = () => {
+        if (latestCheckId) {
+            window.history.pushState({}, "", `/site/${site.site_name}/health-check/${latestCheckId}`);
+            window.dispatchEvent(new Event("popstate"));
+        } else {
+            onViewDetails(site.site_name);
+        }
+    };
 
     const rowView = viewMode === "details";
     const compactView = viewMode === "compact";
@@ -272,11 +188,7 @@ export default function SiteCard({ site, viewMode = "grid", onViewDetails }) {
                         <img src={screenshotUrl} alt={`${site.display_name}`} className="detail-thumb-small" />
                     ) : (
                         <div className="detail-thumb-placeholder">
-                            {capturingSnapshot ? (
-                                <span className="material-symbols-outlined spin-icon">sync</span>
-                            ) : (
-                                <span className="material-symbols-outlined">language</span>
-                            )}
+                            <span className="material-symbols-outlined">language</span>
                         </div>
                     )}
                 </div>
@@ -291,25 +203,14 @@ export default function SiteCard({ site, viewMode = "grid", onViewDetails }) {
                 </div>
 
                 <div className="row-col-health">
-                    <span 
-                        className={`${healthBadgeClass} site-health-badge badge-micro`} 
-                        style={{ cursor: "pointer" }}
-                        onClick={() => {
-                            if (latestSnapshot?.id) {
-                                window.history.pushState({}, "", `/site/${site.site_name}/health-check/${latestSnapshot.id}`);
-                                window.dispatchEvent(new Event("popstate"));
-                            } else {
-                                onViewDetails(site.site_name);
-                            }
-                        }}
-                        title={
-                            healthDisplay === "HEALTHY*"
-                                ? "Healthy with Exceptions: All functional checks passed, but visual diffs or console errors were accepted by an admin."
-                                : latestSnapshot?.id ? "Click to view latest health check details" : "Click to view site details"
-                        }
+                    <button
+                        type="button"
+                        className={`${healthBadgeClass} site-health-badge badge-micro badge-clickable`}
+                        onClick={openLatestReport}
+                        title={healthTitle}
                     >
                         {healthDisplay}
-                    </span>
+                    </button>
                 </div>
 
                 <div className="row-col-badges">
@@ -339,41 +240,40 @@ export default function SiteCard({ site, viewMode = "grid", onViewDetails }) {
                     <span className="site-slug">{site.site_name}</span>
                     <span className="last-checked-label" title={getUpdateStalenessTooltip()}>{getLastCheckedLabel()}</span>
                 </div>
-                <span 
-                    className={`${healthBadgeClass} site-health-badge`} 
-                    style={{ cursor: "pointer" }}
-                    onClick={() => {
-                        if (latestSnapshot?.id) {
-                            window.history.pushState({}, "", `/site/${site.site_name}/health-check/${latestSnapshot.id}`);
-                            window.dispatchEvent(new Event("popstate"));
-                        } else {
-                            onViewDetails(site.site_name);
-                        }
-                    }}
-                    title={
-                        healthDisplay === "HEALTHY*"
-                            ? "Healthy with Exceptions: All functional checks passed, but visual diffs or console errors were accepted by an admin."
-                            : latestSnapshot?.id ? "Click to view latest health check details" : "Click to view site details"
-                    }
+                <button
+                    type="button"
+                    className={`${healthBadgeClass} site-health-badge badge-clickable`}
+                    onClick={openLatestReport}
+                    title={healthTitle}
                 >
                     {healthDisplay}
-                </span>
+                </button>
             </div>
 
             {/* Thumbnail below header for default grid view */}
             {defaultView && (
-                <div className="site-card-thumb" aria-hidden="true">
+                <div className="site-card-thumb">
                     {screenshotUrl ? (
                         <img src={screenshotUrl} alt={`${site.display_name} snapshot`} />
                     ) : (
                         <div className="thumb-loading-placeholder">
-                            {capturingSnapshot ? (
-                                <div className="thumb-capturing-msg">
-                                    <span className="material-symbols-outlined spin-icon">sync</span>
-                                    <span>Capturing snapshot...</span>
-                                </div>
-                            ) : (
+                            {latestCheckId ? (
                                 <span className="material-symbols-outlined">language</span>
+                            ) : (
+                                <div className="thumb-capturing-msg">
+                                    <span className="material-symbols-outlined">photo_camera</span>
+                                    <span>No snapshot yet</span>
+                                    {onRequestCheck && (
+                                        <button
+                                            type="button"
+                                            className="md-button md-button-tonal md-button-sm"
+                                            onClick={() => onRequestCheck(site.site_name)}
+                                            title="Run a health check now and capture a screenshot"
+                                        >
+                                            Run check
+                                        </button>
+                                    )}
+                                </div>
                             )}
                         </div>
                     )}

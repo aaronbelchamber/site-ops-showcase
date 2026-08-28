@@ -7,6 +7,7 @@ from typing import Dict, Any, List, Optional
 
 from src.backup.database import DatabaseBackup
 from src.backup.assets import AssetBackup
+from src.backup.git_assets import GitAssetBackup
 from src.execution.base import BaseExecutor
 from src.api.tasks import set_task_progress
 
@@ -35,7 +36,14 @@ class BackupManager:
             "password": db_pass
         }
         
-        self.db_backup = DatabaseBackup(self.executor, db_config, self.db_dir)
+        self.db_backup = DatabaseBackup(
+            self.executor, db_config, self.db_dir, self.site_config.get("wp_path", "")
+        )
+        self.git_backup = GitAssetBackup(
+            self.executor,
+            self.site_config.get("wp_path", ""),
+            self.site_config.get("git_remote_url"),
+        )
         self.asset_backup = AssetBackup(
             self.executor,
             self.site_config.get("wp_path", ""),
@@ -99,11 +107,19 @@ class BackupManager:
             set_task_progress("Backing up remote WordPress database...")
             db_path = self.db_backup.dump()
             
-            # 2. Asset backup
-            set_task_progress("Archiving remote WordPress asset files...")
-            asset_path = self.asset_backup.archive()
-            
-            # Compute sizes
+            # 2. Asset backup. When the site's code is in git with a remote
+            #    and no media is requested, a commit captures the same state
+            #    without streaming the whole install down to this machine.
+            use_git = GitAssetBackup.is_available(self.site_config, include_media_val)
+            if use_git:
+                set_task_progress("Snapshotting site code to git...")
+                asset_component = self.git_backup.snapshot(description or "Backup snapshot")
+            else:
+                set_task_progress("Archiving remote WordPress asset files...")
+                asset_path = self.asset_backup.archive()
+
+            # Compute sizes. A git snapshot stores nothing locally, so it
+            # contributes no bytes here - that saving is the entire point.
             db_size = os.path.getsize(db_path) if db_path else 0
             asset_size = os.path.getsize(asset_path) if asset_path else 0
             total_size = db_size + asset_size
@@ -117,10 +133,13 @@ class BackupManager:
             except ValueError:
                 relative_db_path = os.path.abspath(db_path).replace("\\", "/")
                 
-            try:
-                relative_asset_path = os.path.relpath(asset_path, project_root).replace("\\", "/")
-            except ValueError:
-                relative_asset_path = os.path.abspath(asset_path).replace("\\", "/")
+            if use_git:
+                relative_asset_path = asset_component
+            else:
+                try:
+                    relative_asset_path = os.path.relpath(asset_path, project_root).replace("\\", "/")
+                except ValueError:
+                    relative_asset_path = os.path.abspath(asset_path).replace("\\", "/")
             
             # Create manifest
             manifest = {
@@ -130,6 +149,7 @@ class BackupManager:
                 "description": description or "Manual backup",
                 "include_media": include_media_val,
                 "backup_type": "Full" if include_media_val else "Partial",
+                "asset_strategy": "git" if use_git else "archive",
                 "components": {
                     "database": relative_db_path,
                     "assets": relative_asset_path
@@ -171,18 +191,23 @@ class BackupManager:
         
         # Get absolute paths to backup files
         db_relative = manifest["components"]["database"]
-        asset_relative = manifest["components"]["assets"]
+        asset_component = manifest["components"]["assets"]
         
         db_abs = os.path.normpath(os.path.join(project_root, db_relative))
-        asset_abs = os.path.normpath(os.path.join(project_root, asset_relative))
         
         # 1. Restore database
         set_task_progress("Restoring remote WordPress database dump...")
         self.db_backup.restore(db_abs)
         
-        # 2. Restore assets
-        set_task_progress("Restoring remote WordPress asset files archive...")
-        self.asset_backup.restore(asset_abs, self.site_config.get("wp_path", ""))
+        # 2. Restore assets. Manifests written before git snapshots existed
+        #    carry a plain archive path here, so both shapes stay restorable.
+        if isinstance(asset_component, dict) and asset_component.get("strategy") == "git":
+            set_task_progress("Rolling site code back to its git snapshot...")
+            self.git_backup.restore(asset_component["commit"])
+        else:
+            set_task_progress("Restoring remote WordPress asset files archive...")
+            asset_abs = os.path.normpath(os.path.join(project_root, asset_component))
+            self.asset_backup.restore(asset_abs, self.site_config.get("wp_path", ""))
         
         set_task_progress("Restore completed successfully!")
         return True
@@ -209,6 +234,8 @@ class BackupManager:
                                     manifest["backup_type"] = "Full"
                             backups.append(manifest)
                 except Exception:
+                    # Silently skip corrupt or unreadable manifests; they're best-effort
+                    # and should not block listing other valid backups.
                     pass
                     
         # Sort descending by timestamp
@@ -269,6 +296,8 @@ class BackupManager:
                     if self.delete_backup(backup["backup_id"]):
                         deleted_count += 1
             except Exception:
-                pass # skip files with unparseable timestamps
+                # Skip backups with unparseable timestamps (corruption or format drift).
+                # This is best-effort cleanup; one bad timestamp doesn't block cleanup of others.
+                pass
                 
         return deleted_count

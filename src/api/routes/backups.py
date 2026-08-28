@@ -1,11 +1,11 @@
-import time
 from typing import Optional, Dict, Any
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request
 from src.config.loader import load_sites_config, load_credentials
 from src.execution import get_executor
 from src.backup.manager import BackupManager
 from src.api.auth import require_api_key
 from src.api.tasks import start_task, operation_in_progress_response
+from src.api.response import ok, err
 
 backups_bp = Blueprint("backups", __name__)
 
@@ -43,7 +43,7 @@ class BackupsController:
         try:
             sites = load_sites_config()
             if site_name not in sites:
-                return jsonify({"success": False, "data": None, "error": f"Site '{site_name}' not found.", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 404
+                return err(f"Site '{site_name}' not found.", 404)
                 
             credentials = load_credentials()
             site_config = sites[site_name]
@@ -52,21 +52,11 @@ class BackupsController:
             try:
                 mgr = BackupManager(site_config, credentials, executor)
                 backups = mgr.list_backups()
-                return jsonify({
-                    "success": True,
-                    "data": backups,
-                    "error": None,
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                })
+                return ok(backups)
             finally:
                 executor.disconnect()
         except Exception as e:
-            return jsonify({
-                "success": False,
-                "data": None,
-                "error": str(e),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }), 500
+            return err(str(e), 500)
 
     @staticmethod
     @require_api_key
@@ -74,16 +64,11 @@ class BackupsController:
         try:
             sites = load_sites_config()
             if site_name not in sites:
-                return jsonify({"success": False, "data": None, "error": f"Site '{site_name}' not found.", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 404
+                return err(f"Site '{site_name}' not found.", 404)
                 
             site_config = sites[site_name]
             if site_config.get("status", "Ready") != "Ready":
-                return jsonify({
-                    "success": False,
-                    "data": None,
-                    "error": f"Site '{site_name}' has status '{site_config.get('status', 'Ready')}'. Operations are only permitted on sites with 'Ready' status.",
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                }), 400
+                return err(f"Site '{site_name}' has status '{site_config.get('status', 'Ready')}'. Operations are only permitted on sites with 'Ready' status.", 400)
                 
             body = request.get_json() or {}
             description = body.get("description", "Manual Web Backup")
@@ -101,19 +86,9 @@ class BackupsController:
             if task_id is None:
                 return operation_in_progress_response(site_name)
 
-            return jsonify({
-                "success": True,
-                "data": {"task_id": task_id, "status": "running"},
-                "error": None,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            })
+            return ok({"task_id": task_id, "status": "running"})
         except Exception as e:
-            return jsonify({
-                "success": False,
-                "data": None,
-                "error": str(e),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }), 500
+            return err(str(e), 500)
 
     @staticmethod
     @require_api_key
@@ -121,7 +96,7 @@ class BackupsController:
         try:
             sites = load_sites_config()
             if site_name not in sites:
-                return jsonify({"success": False, "data": None, "error": f"Site '{site_name}' not found.", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 404
+                return err(f"Site '{site_name}' not found.", 404)
 
             # Validate backup_id format early; ValueError is caught by the
             # except ValueError block below.
@@ -136,29 +111,14 @@ class BackupsController:
                 backups = mgr.list_backups()
                 backup = next((b for b in backups if b.get("backup_id") == backup_id), None)
                 if not backup:
-                    return jsonify({"success": False, "data": None, "error": f"Backup '{backup_id}' not found.", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 404
-                return jsonify({
-                    "success": True,
-                    "data": backup,
-                    "error": None,
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                })
+                    return err(f"Backup '{backup_id}' not found.", 404)
+                return ok(backup)
             finally:
                 executor.disconnect()
         except ValueError:
-            return jsonify({
-                "success": False,
-                "data": None,
-                "error": "Invalid backup_id.",
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }), 400
+            return err("Invalid backup_id.", 400)
         except Exception as e:
-            return jsonify({
-                "success": False,
-                "data": None,
-                "error": str(e),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }), 500
+            return err(str(e), 500)
 
     @staticmethod
     @require_api_key
@@ -169,16 +129,11 @@ class BackupsController:
 
             sites = load_sites_config()
             if site_name not in sites:
-                return jsonify({"success": False, "data": None, "error": f"Site '{site_name}' not found.", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 404
+                return err(f"Site '{site_name}' not found.", 404)
 
             site_config = sites[site_name]
             if site_config.get("status", "Ready") != "Ready":
-                return jsonify({
-                    "success": False,
-                    "data": None,
-                    "error": f"Site '{site_name}' has status '{site_config.get('status', 'Ready')}'. Operations are only permitted on sites with 'Ready' status.",
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                }), 400
+                return err(f"Site '{site_name}' has status '{site_config.get('status', 'Ready')}'. Operations are only permitted on sites with 'Ready' status.", 400)
 
             # Start restore task in background
             task_id = start_task(
@@ -191,26 +146,11 @@ class BackupsController:
             if task_id is None:
                 return operation_in_progress_response(site_name)
 
-            return jsonify({
-                "success": True,
-                "data": {"task_id": task_id, "status": "running"},
-                "error": None,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            })
+            return ok({"task_id": task_id, "status": "running"})
         except ValueError:
-            return jsonify({
-                "success": False,
-                "data": None,
-                "error": "Invalid backup_id.",
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }), 400
+            return err("Invalid backup_id.", 400)
         except Exception as e:
-            return jsonify({
-                "success": False,
-                "data": None,
-                "error": str(e),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }), 500
+            return err(str(e), 500)
 
     @staticmethod
     @require_api_key
@@ -221,7 +161,7 @@ class BackupsController:
 
             sites = load_sites_config()
             if site_name not in sites:
-                return jsonify({"success": False, "data": None, "error": f"Site '{site_name}' not found.", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 404
+                return err(f"Site '{site_name}' not found.", 404)
 
             credentials = load_credentials()
             site_config = sites[site_name]
@@ -231,29 +171,14 @@ class BackupsController:
                 mgr = BackupManager(site_config, credentials, executor)
                 deleted = mgr.delete_backup(backup_id)
                 if not deleted:
-                    return jsonify({"success": False, "data": None, "error": f"Failed to delete backup '{backup_id}'. It may not exist.", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), 404
-                return jsonify({
-                    "success": True,
-                    "data": {"message": f"Backup '{backup_id}' successfully deleted."},
-                    "error": None,
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                })
+                    return err(f"Failed to delete backup '{backup_id}'. It may not exist.", 404)
+                return ok({"message": f"Backup '{backup_id}' successfully deleted."})
             finally:
                 executor.disconnect()
         except ValueError:
-            return jsonify({
-                "success": False,
-                "data": None,
-                "error": "Invalid backup_id.",
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }), 400
+            return err("Invalid backup_id.", 400)
         except Exception as e:
-            return jsonify({
-                "success": False,
-                "data": None,
-                "error": str(e),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }), 500
+            return err(str(e), 500)
 
 # Route mappings to BackupsController
 backups_bp.route("/<site_name>/backups", methods=["GET"])(BackupsController.get_backups)

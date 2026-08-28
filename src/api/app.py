@@ -2,7 +2,7 @@ import os
 import sys
 import time
 import threading
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -11,6 +11,8 @@ from src.api.routes.sites import sites_bp
 from src.api.routes.backups import backups_bp
 from src.api.routes.health import health_bp
 from src.api.routes.updates import updates_bp
+from src.api.routes.users import users_bp
+from src.api.routes.vulnerability import vulnerability_bp
 from src.api.routes.system import system_bp
 from src.api.routes.profiles import profiles_bp
 
@@ -53,7 +55,8 @@ class AppFactory:
         static_dir = os.path.join(project_root, "static")
         
         app = Flask(__name__, static_folder=static_dir, static_url_path="")
-        
+        app.config["MAX_CONTENT_LENGTH"] = int(os.environ.get("MAX_UPLOAD_MB", "25")) * 1024 * 1024
+
 
         @app.route("/health")
         def health():
@@ -70,24 +73,18 @@ class AppFactory:
             return {"status": "ok", "service": "site-manager"}
 
         @app.route("/")
-        @app.route("/site/add")
-        @app.route("/site/<path:sitename>/edit")
-        @app.route("/site/<path:sitename>/details")
-        @app.route("/site/<path:sitename>/details/<path:subpath>")
-        @app.route("/site/<path:sitename>/health-check/<path:check_id>")
-        @app.route("/production-health")
-        @app.route("/logs")
-        @app.route("/admin")
-        @app.route("/profiles")
         def index(**kwargs):
             return app.send_static_file("index.html")
         
         # 1. Register Blueprints
-        # sites, backups, health, and updates are all nested under /api/sites prefix
+        # sites, backups, health, updates, users, and vulnerability are all
+        # nested under the /api/sites prefix
         app.register_blueprint(sites_bp, url_prefix="/api/sites")
         app.register_blueprint(backups_bp, url_prefix="/api/sites")
         app.register_blueprint(health_bp, url_prefix="/api/sites")
         app.register_blueprint(updates_bp, url_prefix="/api/sites")
+        app.register_blueprint(users_bp, url_prefix="/api/sites")
+        app.register_blueprint(vulnerability_bp, url_prefix="/api/sites")
         
         # profiles endpoints under /api/profiles
         app.register_blueprint(profiles_bp, url_prefix="/api/profiles")
@@ -110,6 +107,33 @@ class AppFactory:
         # 3. Global Error Handlers
         @app.errorhandler(404)
         def not_found(error):
+            """
+            Unmatched paths fall through to the single-page app so that deep
+            links and refreshes work on client-side routes.
+
+            This replaced a hand-maintained list of @app.route entries that had
+            drifted from the frontend router: /manage-sites and its sub-routes
+            were never added, so refreshing there returned this JSON 404 in
+            production (dev worked only because Vite serves the SPA itself).
+            Routing through the 404 handler means new client routes need no
+            server change.
+
+            API paths and asset-looking paths still 404 properly -- returning
+            index.html for a missing bundle would turn a build error into a
+            blank page.
+            """
+            path = request.path
+            is_api = path.startswith("/api/")
+            looks_like_file = "." in os.path.basename(path)
+            wants_html = "text/html" in (request.headers.get("Accept") or "")
+
+            if request.method == "GET" and not is_api and not looks_like_file and wants_html:
+                try:
+                    return app.send_static_file("index.html")
+                except Exception:
+                    # Static bundle not built or unreadable; fall through to JSON 404 response. Best-effort SPA routing.
+                    pass
+
             return jsonify({
                 "success": False,
                 "data": None,
@@ -125,15 +149,28 @@ class AppFactory:
                 "error": "Bad request.",
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             }), 400
-    
+
+        @app.errorhandler(413)
+        def payload_too_large(error):
+            return jsonify({
+                "success": False,
+                "data": None,
+                "error": "The uploaded file is too large.",
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            }), 413
+
         @app.errorhandler(500)
         def internal_server_error(error):
             import traceback
+            from src.logging.logger import logger as app_logger
             app_debug = os.environ.get("APP_DEBUG", "false").lower() in ["true", "1"]
+            app_logger.error(f"Unhandled exception: {error}", exc_info=True)
             resp = {
                 "success": False,
                 "data": None,
-                "error": f"Internal server error: {error}",
+                # Detail is logged server-side above; never echo exception text to
+                # the client regardless of APP_DEBUG (which only gates the traceback).
+                "error": "Internal server error.",
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             }
             if app_debug:
@@ -144,6 +181,26 @@ class AppFactory:
 
 # Backward-compatible alias
 create_app = AppFactory.create_app
+
+
+def serve_app(app: Flask, host: str, port: int, debug: bool, threads: int = 8) -> None:
+    """
+    Serve the app appropriately for the requested mode.
+
+    debug=True uses Flask's own dev server, since only it supports the
+    auto-reloader development relies on. debug=False uses waitress -- the
+    Werkzeug dev server is single-threaded by default and was serializing
+    every request behind whichever one is slowest, which is what turned
+    the pre-remediation perf issues into outright timeouts under load.
+    """
+    if debug:
+        app.run(host=host, port=port, debug=True)
+        return
+
+    from waitress import serve
+    print(f"Serving via waitress (production WSGI server, {threads} threads) on {host}:{port}...")
+    serve(app, host=host, port=port, threads=threads)
+
 
 if __name__ == "__main__":
     start_cleanup_scheduler(debug=True)

@@ -219,6 +219,7 @@ class CoreUpdater:
             try:
                 self.health_manager.run_all_checks()
             except Exception as e:
+                # Post-update screenshot refresh is best-effort. Update succeeds even if snapshot capture fails.
                 console_debug = f"Post-update screenshot refresh failed: {e}"
 
         set_task_progress("WordPress core updated successfully!")

@@ -1,13 +1,13 @@
-import time
 import re
 import uuid
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request
 from src.config.loader import (
     load_raw_credentials,
     save_credentials,
     mask_credential_keys,
 )
 from src.api.auth import require_api_key
+from src.api.response import ok, err
 from src.logging.logger import logger
 
 profiles_bp = Blueprint("profiles", __name__)
@@ -50,19 +50,9 @@ class ProfilesController:
                     
                 safe_profiles.append(profile)
                 
-            return jsonify({
-                "success": True,
-                "data": safe_profiles,
-                "error": None,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            })
+            return ok(safe_profiles)
         except Exception as e:
-            return jsonify({
-                "success": False,
-                "data": None,
-                "error": str(e),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }), 500
+            return err(str(e), 500)
 
     @staticmethod
     @require_api_key
@@ -72,12 +62,7 @@ class ProfilesController:
             title = body.get("title")
             title = str(title).strip() if title is not None else ""
             if not title:
-                return jsonify({
-                    "success": False,
-                    "data": None,
-                    "error": "Profile title is required.",
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                }), 400
+                return err("Profile title is required.", 400)
 
             p_id = body.get("id")
             if p_id is not None:
@@ -133,9 +118,7 @@ class ProfilesController:
             save_credentials(raw)
             logger.info(f"Credential profile '{title}' (ID: '{p_id}') successfully saved.")
             
-            return jsonify({
-                "success": True,
-                "data": {
+            return ok({
                     "id": p_id,
                     "title": title,
                     "ssh_host": ssh_host,
@@ -143,17 +126,9 @@ class ProfilesController:
                     "ssh_user": ssh_user,
                     "has_password": bool(ssh_password),
                     "has_private_key": bool(ssh_private_key)
-                },
-                "error": None,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            })
+                })
         except Exception as e:
-            return jsonify({
-                "success": False,
-                "data": None,
-                "error": str(e),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }), 500
+            return err(str(e), 500)
 
     @staticmethod
     @require_api_key
@@ -166,19 +141,9 @@ class ProfilesController:
                 save_credentials(raw)
                 logger.info(f"Credential profile '{profile_id}' successfully deleted.")
                 
-            return jsonify({
-                "success": True,
-                "data": None,
-                "error": None,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            })
+            return ok(None)
         except Exception as e:
-            return jsonify({
-                "success": False,
-                "data": None,
-                "error": str(e),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }), 500
+            return err(str(e), 500)
 
 # Route mappings
 profiles_bp.route("", methods=["GET"])(ProfilesController.get_profiles)
