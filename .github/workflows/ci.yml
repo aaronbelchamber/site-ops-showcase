@@ -57,6 +57,24 @@ jobs:
         # are download time nothing here uses.
         run: python -m playwright install --with-deps chromium
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build the frontend the smoke test drives
+        # test_browser_smoke launches a real browser at the running app and
+        # waits for #authOverlay, which only exists once the SPA is built.
+        # static/ is generated and gitignored, so on a clean checkout there is
+        # nothing to serve and the test times out looking like a broken
+        # selector. The frontend job proves the build is clean; this one needs
+        # its output.
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
       - name: Report the environment before trusting the result
         # A green tick means nothing if the job did not have what it claims to
         # be testing with. Printed as JSON so the log carries the evidence.

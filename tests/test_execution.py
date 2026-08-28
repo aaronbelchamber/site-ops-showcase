@@ -65,9 +65,21 @@ class TestLocalExecutor(unittest.TestCase):
             f.write("stream_input_data")
             
         try:
-            cmd = "python -c \"import sys; sys.stdout.write(sys.stdin.read().upper())\""
+            # `sys.executable`, not the bare name: "python" is whatever the
+            # shell's PATH resolves, and on a Linux runner that is often
+            # `python3` only -- the bare name exits 127, the write to a dead
+            # child's stdin raises, and the result is an opaque success=False.
+            # This test is about streaming a file into stdin, not about how the
+            # interpreter happens to be named on the host.
+            cmd = (f'"{sys.executable}" -c '
+                   '"import sys; sys.stdout.write(sys.stdin.read().upper())"')
             result = self.executor.execute_stream_input(cmd, input_path)
-            self.assertTrue(result.success)
+            # Report *why* on failure. An assertion that only says False is not
+            # true costs a full CI round-trip to diagnose, which is exactly what
+            # it cost here.
+            self.assertTrue(
+                result.success,
+                f"exit={result.exit_code} stdout={result.stdout!r} stderr={result.stderr!r}")
             self.assertEqual(result.exit_code, 0)
             self.assertEqual(result.stdout, "STREAM_INPUT_DATA")
         finally:
