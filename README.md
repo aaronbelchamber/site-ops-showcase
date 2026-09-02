@@ -1,4 +1,4 @@
-# 🚀 WordPress Site Manager
+# WordPress Site Manager
 
 > Built by [Aaron Belchamber](https://belchamber.us) — Business Growth & Cloud Systems Architect
 > A standalone infrastructure management tool — no dependency on any other project.
