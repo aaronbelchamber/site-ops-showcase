@@ -72,7 +72,7 @@
        than replacing it: Material stays the design system here, nothing above
        changes, and no component has to be rewritten. Because they are `var()`
        references they follow the dark-theme overrides automatically.
-       Reference table: central-project-hub's DESIGN_SYSTEM.md. */
+       Reference table: project-hub's DESIGN_SYSTEM.md. */
     --bg: var(--md-sys-color-background);
     --surface: var(--md-sys-color-surface);
     --surface-raised: var(--md-sys-color-surface-container);
