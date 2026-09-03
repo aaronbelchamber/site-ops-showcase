@@ -1,5 +1,5 @@
 # CI runs here, on the public half of the pair, where Actions minutes are free
-# and unlimited. site-ops-private deliberately does not run its
+# and unlimited. site-ops deliberately does not run its
 # own automatic suite: the two are near-identical by construction, so this run
 # is the coverage for both. See PREFERENCES.md, "Continuous integration".
 #
