@@ -51,8 +51,8 @@ Clone the repository and install backend & frontend dependencies:
 
 ```bash
 # Clone the repository
-git clone https://github.com/aaronbelchamber/wordpress-site-manager.git
-cd wordpress-site-manager
+git clone https://github.com/aaronbelchamber/site-ops.git
+cd site-ops
 
 # Install Python requirements
 pip install -r requirements.txt

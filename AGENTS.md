@@ -15,8 +15,8 @@ Read MISSION.md for what this is.
 
 ## Repo name mismatch
 
-The local folder is `wordpress-site-manager-public`, but the actual GitHub
-repo is `aaronbelchamber/wordpress-site-manager` (no `-public` suffix). Use
+The local folder is `site-ops-public`, but the actual GitHub
+repo is `aaronbelchamber/site-ops` (no `-public` suffix). Use
 that name for any `gh` command, API call, issue link, or clone URL — the
 folder name will not match.
 
@@ -39,20 +39,20 @@ folder name will not match.
 - **CI runs here**, in `.github/workflows/ci.yml`: pytest on Python 3.11 and
   3.12, plus lint, tests and build for the frontend. This is the public half of
   the pair, so Actions minutes are free, and this run is the coverage for both
-  repos -- `wordpress-site-manager-private` deliberately has no automatic suite
+  repos -- `site-ops-private` deliberately has no automatic suite
   of its own.
 
 ## Sync direction and drift risk
 
 This is a synced-out public release, not the canonical repo. Development
-happens in **wordpress-site-manager-private** first and is synced out here
+happens in **site-ops-private** first and is synced out here
 (private -> public, one-way). This repo has no dependency back on the
 private one — it's a full working copy — but independent edits to shared
 components here risk diverging from the private repo. Confirmed real case:
 both repos modified `HealthCheckDetails.jsx` in the same week (this repo
 added a Production Health dashboard; the private repo refactored the same
 component into a directory split), and the two versions are now different.
-Prefer making shared backend/UI logic changes in wordpress-site-manager-private
+Prefer making shared backend/UI logic changes in site-ops-private
 and syncing them out, rather than changing them here independently.
 
 ## What this is / isn't

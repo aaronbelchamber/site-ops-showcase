@@ -1,7 +1,7 @@
 # Mission
 
-Note: this folder is named `wordpress-site-manager-public` locally, but the actual GitHub
-repo is `aaronbelchamber/wordpress-site-manager` (no `-public` suffix) -- use that name for
+Note: this folder is named `site-ops-public` locally, but the actual GitHub
+repo is `aaronbelchamber/site-ops` (no `-public` suffix) -- use that name for
 `gh`/API calls, issues, or links.
 
 WordPress Site Manager is a local-first dashboard and CLI for managing a
@@ -55,7 +55,7 @@ backup sync.
 
 ## Related projects -- and, if applicable, how they work together
 
-- **wordpress-site-manager-private** (private repo, canonical upstream).
+- **site-ops-private** (private repo, canonical upstream).
   This repo is the synced public release of that project -- development
   happens there first and is synced out here (sync direction is private ->
   public, one way; this repo has no dependency back on the private one, it's
