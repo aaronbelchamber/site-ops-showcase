@@ -1,24 +1,35 @@
 > **Standing preferences apply to this repo.** The operator of this project
-> keeps one cross-project preferences file — ports, launching processes without
-> a window, URL hygiene, branch conventions, script placement, file-size
-> thresholds, verification, design systems, self-review — outside this
-> repository, and it is canonical where it and anything below disagree.
+> keeps them outside this repository, in four cross-project files —
+> `PREFERENCES.md` (ports, launching processes without a window, URL hygiene,
+> hosting), `PRACTICES.md` (script placement, file size, verification, design
+> systems, self-review, CI), `COLLABORATION.md` (version control and branch
+> conventions, worktrees rather than `main`) and `DOCUMENTATION.md` (writing a
+> doc in the tense of what exists, session retros). All four are canonical
+> where they and anything below disagree.
 >
-> It is not published here, and it is not something an outside contributor
-> needs: everything required to build, test and run this project is in this
-> repo. If you are working with the drive mounted, read it before changing
-> anything.
+> They are not published here, and they are not something an outside
+> contributor needs: everything required to build, test and run this project is
+> in this repo. If you are working with the drive mounted they are in
+> `E:\project-hub\` — read all four before changing anything.
 
 # AGENTS.md
 
 Read MISSION.md for what this is.
 
-## Repo name mismatch
+## Repo name
 
-The local folder is `site-ops-showcase`, but the actual GitHub
-repo is `aaronbelchamber/site-ops` (no `-public` suffix). Use
-that name for any `gh` command, API call, issue link, or clone URL — the
-folder name will not match.
+The local folder is `site-ops-showcase` and so is the GitHub repo:
+`aaronbelchamber/site-ops-showcase`. They match -- use that name for any `gh`
+command, API call, issue link or clone URL.
+
+This section said the opposite until 2026-09-04: that the real repo was
+`aaronbelchamber/site-ops`, and to use *that* name for every `gh` command. That
+is the **private** upstream, a different repository, and following it pointed
+public-repo work at a repo outside contributors cannot even read. It came in
+with `4258044 Collapse the site-ops pair to a single repository`, whose premise
+did not hold -- the pair was never collapsed. `MISSION.md` was corrected in
+`c2ca2b0` and this file was missed. Verified against `git remote -v` in both
+trees on 2026-09-04.
 
 ## Running locally
 
