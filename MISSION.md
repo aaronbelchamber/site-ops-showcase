@@ -1,8 +1,9 @@
 # Mission
 
-Note: this folder is named `site-ops-showcase` locally, but the actual GitHub
-repo is `aaronbelchamber/site-ops` (no `-public` suffix) -- use that name for
-`gh`/API calls, issues, or links.
+Note: this folder is named `site-ops-showcase` locally, and that matches its
+actual GitHub repo, `aaronbelchamber/site-ops-showcase` -- verified against
+`git remote -v` on 2026-09-03. It is a separate repo from the private
+`site-ops` (`aaronbelchamber/site-ops`), which this folder mirrors.
 
 WordPress Site Manager is a local-first dashboard and CLI for managing a
 fleet of WordPress sites (remote over SSH, or local) from one place. It
