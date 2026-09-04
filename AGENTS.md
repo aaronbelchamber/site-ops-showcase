@@ -16,20 +16,39 @@
 
 Read MISSION.md for what this is.
 
-## Repo name
+## This repo is archived -- read it, do not work in it
 
-The local folder is `site-ops-showcase` and so is the GitHub repo:
-`aaronbelchamber/site-ops-showcase`. They match -- use that name for any `gh`
-command, API call, issue link or clone URL.
+`origin` here is `aaronbelchamber/site-ops-showcase`, which is public and
+**archived**. GitHub refuses every push to it:
 
-This section said the opposite until 2026-09-04: that the real repo was
-`aaronbelchamber/site-ops`, and to use *that* name for every `gh` command. That
-is the **private** upstream, a different repository, and following it pointed
-public-repo work at a repo outside contributors cannot even read. It came in
-with `4258044 Collapse the site-ops pair to a single repository`, whose premise
-did not hold -- the pair was never collapsed. `MISSION.md` was corrected in
-`c2ca2b0` and this file was missed. Verified against `git remote -v` in both
-trees on 2026-09-04.
+```
+ERROR: This repository was archived so it is read-only.
+```
+
+So this working tree is a historical copy. A commit made here can be made, and
+can never be published. Active development is in the **private**
+`aaronbelchamber/site-ops` -- a genuinely separate repository, not a rename --
+which is what `4258044 Collapse the site-ops pair to a single repository`
+recorded. Take any change to that repo instead.
+
+Two earlier attempts to write this section down were each half right, and the
+way they failed is the useful part. The original said the folder "is really"
+`aaronbelchamber/site-ops` and to use that name for every `gh` command: right
+about where work goes, wrong that this tree is that repo -- following it files
+issues against a repository this checkout is not. `c2ca2b0` and then this file
+on 2026-09-04 corrected it the other way, to "the names match, use
+site-ops-showcase", on the strength of `git remote -v` agreeing in both trees.
+
+`git remote -v` prints a configured string. It says nothing about whether the
+repository on the other end exists, accepts writes, or is still the one anyone
+uses -- and here it was pointing at an archive. `gh repo view <name> --json
+name,visibility` and an actual push are what answer that; the archive only
+surfaced when a push was attempted. State verified on 2026-09-04:
+
+| Repo | Visibility | State |
+|---|---|---|
+| `aaronbelchamber/site-ops-showcase` | public | archived, read-only |
+| `aaronbelchamber/site-ops` | private | active |
 
 ## Running locally
 
