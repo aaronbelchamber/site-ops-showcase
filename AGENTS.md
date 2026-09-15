@@ -1,19 +1,9 @@
 > **Standing preferences apply to this repo.** The operator of this project
-> keeps them outside this repository, in a set of cross-project files —
-> `PREFERENCES.md` (ports, launching processes without a window, URL hygiene,
-> hosting), `PRACTICES.md` (script placement, file size, design systems, who
-> owns what across projects), `VERIFICATION.md` (how a claim that work is
-> finished gets established, self-review, CI), `COLLABORATION.md` (version
-> control and branch conventions, worktrees rather than `main`) and
-> `DOCUMENTATION.md` (writing a doc in the tense of what exists, session
-> retros). All of them are canonical where they and anything below disagree.
->
-> They are not published here, and they are not something an outside
-> contributor needs: everything required to build, test and run this project is
-> in this repo. If you are working with the drive mounted they are in
-> `E:\project-hub\` — list `*.md` there and read what is present before
-> changing anything, rather than working from the list above: the set grows
-> each time one of those files outgrows its own size rule.
+> keeps them outside this repository, in a set of cross-project files that are
+> canonical wherever they and anything below disagree. They are not published
+> here, and an outside contributor does not need them. With the drive mounted
+> they are in `E:\project-hub\docs\standards\` — list `*.md` there and read what
+> is present rather than trusting a list written here.
 
 # AGENTS.md
 
@@ -69,11 +59,10 @@ surfaced when a push was attempted. State verified on 2026-09-04:
   `requirements-dev.txt` (adds pytest). The batch launchers used to be the only
   record of them and had fallen behind the code -- Pillow, playwright, pydantic,
   waitress and werkzeug are all imported and none were in that list.
-- **CI runs here**, in `.github/workflows/ci.yml`: pytest on Python 3.11 and
-  3.12, plus lint, tests and build for the frontend. This is the public half of
-  the pair, so Actions minutes are free, and this run is the coverage for both
-  repos -- `site-ops` deliberately has no automatic suite
-  of its own.
+- **CI no longer runs anywhere for this code.** `.github/workflows/ci.yml` was
+  the coverage for both repos while this public half accepted pushes; since the
+  archive nothing triggers it. `site-ops` is covered by a local pre-merge test
+  gate instead, ruled 2026-09-14 — see that repo's AGENTS.md.
 
 ## Sync direction and drift risk
 
