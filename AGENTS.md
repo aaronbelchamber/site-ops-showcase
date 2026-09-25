@@ -18,25 +18,13 @@ Read MISSION.md for what this is.
 ERROR: This repository was archived so it is read-only.
 ```
 
-So this working tree is a historical copy. A commit made here can be made, and
-can never be published. Active development is in the **private**
-`aaronbelchamber/site-ops` -- a genuinely separate repository, not a rename --
-which is what `4258044 Collapse the site-ops pair to a single repository`
-recorded. Take any change to that repo instead.
+Every commit made here is pushed, so this tree matches `origin/main`, and the
+folder sits under `projects\archives\`. Active development is in the
+**private** `aaronbelchamber/site-ops`, a separate repository, not a rename.
+Take any change, issue or `gh` command there instead.
 
-Two earlier attempts to write this section down were each half right, and the
-way they failed is the useful part. The original said the folder "is really"
-`aaronbelchamber/site-ops` and to use that name for every `gh` command: right
-about where work goes, wrong that this tree is that repo -- following it files
-issues against a repository this checkout is not. `c2ca2b0` and then this file
-on 2026-09-04 corrected it the other way, to "the names match, use
-site-ops-showcase", on the strength of `git remote -v` agreeing in both trees.
-
-`git remote -v` prints a configured string. It says nothing about whether the
-repository on the other end exists, accepts writes, or is still the one anyone
-uses -- and here it was pointing at an archive. `gh repo view <name> --json
-name,visibility` and an actual push are what answer that; the archive only
-surfaced when a push was attempted. State verified on 2026-09-04:
+`git remote -v` only prints a configured string; `gh repo view <name> --json
+isArchived,visibility` is what says whether the other end accepts writes.
 
 | Repo | Visibility | State |
 |---|---|---|
@@ -44,6 +32,9 @@ surfaced when a push was attempted. State verified on 2026-09-04:
 | `aaronbelchamber/site-ops` | private | active |
 
 ## Running locally
+
+The estate's port registry no longer reserves these ports for this archive, so
+another project may hold them; check before starting it.
 
 - Backend: `python manage.py init` once, then `python manage.py runserver`
   (Flask, port 63010).

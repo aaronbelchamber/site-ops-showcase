@@ -1,19 +1,10 @@
 # Mission
 
-Note: this folder is named `site-ops-showcase` locally and its `origin` is
-`aaronbelchamber/site-ops-showcase`, a separate repository from the private
-`site-ops` (`aaronbelchamber/site-ops`), which it mirrors. **That public repo is
-archived and rejects all pushes**, confirmed 2026-09-04, so this tree is a
-historical copy and changes belong in the private repo.
-
-**This working tree is permanently ahead of `origin/main`, and that is
-intended.** Commits made here after the archive can never be pushed, so the
-divergence is not drift to reconcile and no session should try: there is no
-`git push` that will succeed, and rebasing or resetting to `origin/main` would
-throw away the only copy of these corrections. Leave it ahead. An earlier version of
-this note called the name "verified against `git remote -v`" -- that command
-verifies a configured string, not that the repo on the other end still accepts
-writes. See AGENTS.md.
+Note: this repository, `aaronbelchamber/site-ops-showcase`, is the public
+copy of the private `site-ops` (`aaronbelchamber/site-ops`), a separate
+repository. **It is archived and read-only on GitHub**, and every commit made
+here is pushed, so this tree matches `origin/main`. Changes belong in the
+private repo. See AGENTS.md.
 
 WordPress Site Manager is a local-first dashboard and CLI for managing a
 fleet of WordPress sites (remote over SSH, or local) from one place. It
